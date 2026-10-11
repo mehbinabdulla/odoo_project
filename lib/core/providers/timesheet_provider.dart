@@ -113,28 +113,27 @@ class TimesheetProvider with ChangeNotifier {
       final availableFields = await OdooFieldRegistry.getFieldNames('account.analytic.line');
       final hasEmployeeId = availableFields.isEmpty || availableFields.contains('employee_id');
 
-      final domain = <dynamic>[
-        ['date', '>=', _formatDate(_startDate)],
-        ['date', '<=', _formatDate(_endDate)],
-      ];
-
+      final baseDomain = <dynamic>[];
       if (_filterProjectId != null) {
-        domain.add(['project_id', '=', _filterProjectId]);
+        baseDomain.add(['project_id', '=', _filterProjectId]);
       }
       final currentFilterUser = filterUserId;
       if (currentFilterUser != null) {
         if (hasEmployeeId) {
-          domain.add(['employee_id.user_id', '=', currentFilterUser]);
+          baseDomain.add(['employee_id.user_id', '=', currentFilterUser]);
         } else {
-          domain.add(['user_id', '=', currentFilterUser]);
+          baseDomain.add(['user_id', '=', currentFilterUser]);
         }
       }
 
       if (!loadMore) {
-        await loadDashboardStats(domain);
+        final dashboardDomain = List<dynamic>.from(baseDomain)
+          ..add(['date', '>=', _formatDate(_startDate)])
+          ..add(['date', '<=', _formatDate(_endDate)]);
+        await loadDashboardStats(dashboardDomain);
       }
 
-      final fetchDomain = List<dynamic>.from(domain);
+      final fetchDomain = List<dynamic>.from(baseDomain);
       if (_searchQuery.isNotEmpty) {
         fetchDomain.add(['name', 'ilike', _searchQuery]);
       }

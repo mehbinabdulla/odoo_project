@@ -251,21 +251,27 @@ class _ProfileItem extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                session?.userName ?? 'User',
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-              Text(
-                session?.userLogin ?? '',
-                style: GoogleFonts.poppins(
-                  fontSize: 13,
-                  color: AppColors.primary,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  session?.userName ?? 'User',
+                  style: Theme.of(context).textTheme.titleSmall,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ),
-            ],
+                Text(
+                  session?.userLogin ?? '',
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    color: AppColors.primary,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
           ),
         ],
       ),

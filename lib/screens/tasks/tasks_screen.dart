@@ -227,10 +227,14 @@ class _TaskCard extends StatelessWidget {
                       fontSize: 15,
                       fontWeight: FontWeight.w600,
                     ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                const SizedBox(width: 16),
-                _StatusBadge(state: task.state ?? ''),
+                if (task.stageName?.isNotEmpty == true) ...[
+                  const SizedBox(width: 16),
+                  _StatusBadge(task: task),
+                ],
               ],
             ),
             if (task.projectName != null) ...[
@@ -242,11 +246,15 @@ class _TaskCard extends StatelessWidget {
                     color: theme.colorScheme.onSurface.withValues(alpha: 0.5)
                   ),
                   const SizedBox(width: 4),
-                  Text(
-                    task.projectName!,
-                    style: GoogleFonts.poppins(
-                      fontSize: 13,
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                  Expanded(
+                    child: Text(
+                      task.projectName!,
+                      style: GoogleFonts.poppins(
+                        fontSize: 13,
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ],
@@ -280,31 +288,20 @@ class _TaskCard extends StatelessWidget {
 }
 
 class _StatusBadge extends StatelessWidget {
-  final String state;
-  const _StatusBadge({required this.state});
+  final TaskModel task;
+  const _StatusBadge({required this.task});
 
   @override
   Widget build(BuildContext context) {
-    Color color;
-    String label;
-
-    switch (state) {
-      case 'done':
-        color = AppColors.statusDone;
-        label = 'Done';
-        break;
-      case 'in_progress':
-        color = AppColors.accent;
-        label = 'In Progress';
-        break;
-      case 'cancelled':
-        color = AppColors.statusBlocked;
-        label = 'Cancelled';
-        break;
-      default:
-        color = AppColors.statusTodo;
-        label = 'To Do';
-    }
+    final String label = task.stageName?.isNotEmpty == true ? task.stageName! : 'No Stage';
+    final colors = [
+      AppColors.statusTodo,
+      AppColors.statusInProgress,
+      AppColors.statusDone,
+      AppColors.statusReview,
+      AppColors.accentPink,
+    ];
+    final color = colors[label.hashCode.abs() % colors.length];
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -315,8 +312,8 @@ class _StatusBadge extends StatelessWidget {
       child: Text(
         label,
         style: GoogleFonts.poppins(
-          fontSize: 10,
-          fontWeight: FontWeight.w700,
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
           color: color,
         ),
       ),

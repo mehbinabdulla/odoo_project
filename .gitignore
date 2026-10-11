@@ -27,7 +27,9 @@ migrate_working_dir/
 **/doc/api/
 **/ios/Flutter/.last_build_id
 .dart_tool/
+.flutter-plugins
 .flutter-plugins-dependencies
+.packages
 .pub-cache/
 .pub/
 /build/
@@ -43,3 +45,21 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Secrets / local config - never commit these
+.env
+.env.*
+*.env
+*.keystore
+*.jks
+*.key
+android/key.properties
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+local.properties
+**/local.properties
+
+# Misc
+*.orig
+*~
+.DS_Store

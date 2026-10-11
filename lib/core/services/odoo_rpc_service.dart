@@ -464,9 +464,10 @@ class OdooRpcService {
 
   static const List<String> projectFieldCandidates = [
     'id', 'name', 'description', 'active', 'user_id', 'partner_id',
-    'company_id', 'task_count', 'closed_task_count', 'date', 'create_date',
-    'privacy_visibility', 'is_favorite', 'last_update_status',
-    'last_update_color', 'alias_id', 'tag_ids', 'color',
+    'company_id', 'task_count', 'task_count_with_subtasks', 'closed_task_count',
+    'date', 'create_date', 'privacy_visibility', 'is_favorite', 
+    'last_update_status', 'stage_id', 'last_update_color', 'alias_id', 
+    'tag_ids', 'color',
   ];
 
   static const List<String> taskFieldCandidates = [

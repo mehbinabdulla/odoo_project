@@ -235,6 +235,12 @@ class AppTheme {
         elevation: 4,
         shape: CircleBorder(),
       ),
+      popupMenuTheme: PopupMenuThemeData(
+        color: AppColors.darkCardElevated,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        textStyle: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w500, color: AppColors.darkTextPrimary),
+        elevation: 8,
+      ),
     );
   }
 
@@ -370,6 +376,12 @@ class AppTheme {
         foregroundColor: Colors.white,
         elevation: 4,
         shape: CircleBorder(),
+      ),
+      popupMenuTheme: PopupMenuThemeData(
+        color: AppColors.lightCardElevated,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        textStyle: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w500, color: AppColors.lightTextPrimary),
+        elevation: 8,
       ),
     );
   }

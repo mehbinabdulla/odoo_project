@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:provider/provider.dart';
+import 'package:intl/intl.dart';
 import '../../core/models/project_models.dart';
 import '../../core/providers/project_provider.dart';
 import '../../core/providers/session_provider.dart';
@@ -25,9 +26,24 @@ class ProjectDetailScreen extends StatefulWidget {
   State<ProjectDetailScreen> createState() => _ProjectDetailScreenState();
 }
 
+class KanbanColumnState {
+  final ProjectStageModel stage;
+  List<TaskModel> tasks;
+  int offset;
+  bool hasMore;
+  bool isLoadingMore;
+
+  KanbanColumnState({
+    required this.stage,
+    this.tasks = const [],
+    this.offset = 0,
+    this.hasMore = true,
+    this.isLoadingMore = false,
+  });
+}
+
 class _ProjectDetailScreenState extends State<ProjectDetailScreen>
     with SingleTickerProviderStateMixin, RouteAwareRefetchMixin {
-  List<TaskModel> _tasks = [];
   List<ProjectStageModel> _stages = [];
   bool _isLoading = true;
   String? _error;
@@ -36,6 +52,15 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
   String _searchQuery = '';
   Map<String, dynamic> _fieldDefs = {};
   Map<String, dynamic> _fieldValues = {};
+
+  // Pagination state for Tasks List tab
+  List<TaskModel> _listTasks = [];
+  int _listOffset = 0;
+  bool _listHasMore = true;
+  bool _isListLoadingMore = false;
+
+  // Pagination state for Kanban board columns
+  Map<int, KanbanColumnState> _kanbanState = {};
 
   @override
   void initState() {
@@ -62,24 +87,26 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
     try {
       final provider = context.read<ProjectProvider>();
       final results = await Future.wait([
-        provider.loadTasksForProject(widget.project.id),
         provider.loadStages(widget.project.id),
         OdooFieldRegistry.getFieldDefs('project.project'),
       ]);
 
-      _fieldDefs = results[2] as Map<String, dynamic>;
-      _tasks = results[0] as List<TaskModel>;
-      _stages = results[1] as List<ProjectStageModel>;
+      _stages = results[0] as List<ProjectStageModel>;
+      _fieldDefs = results[1] as Map<String, dynamic>;
 
+      // Initialize kanban states
+      _kanbanState = {
+        for (var stage in _stages)
+          stage.id: KanbanColumnState(stage: stage)
+      };
+
+      // Fetch dynamic fields for the project
       List<String> fieldsToFetch = _fieldDefs.keys.toList();
       List<Map<String, dynamic>> records = [];
-
       try {
         records = await OdooRpcService.safeSearchRead(
           model: 'project.project',
-          domain: [
-            ['id', '=', widget.project.id],
-          ],
+          domain: [['id', '=', widget.project.id]],
           fields: fieldsToFetch,
         );
         if (records.isNotEmpty) {
@@ -89,40 +116,119 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
         debugPrint('Dynamic field fetch failed (non-fatal): $e');
       }
 
-      setState(() {});
+      // Initial task loads
+      await Future.wait([
+        _loadListTasks(reset: true, showLoading: false),
+        _loadAllKanbanColumns(reset: true),
+      ]);
+
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     } catch (e) {
-      setState(() => _error = e.toString());
-    } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _isLoading = false;
+        });
+      }
     }
   }
 
-  List<TaskModel> get _filteredTasks {
-    List<TaskModel> list = _tasks;
-
-    if (_searchQuery.isNotEmpty) {
-      list = list
-          .where(
-            (t) => t.name.toLowerCase().contains(_searchQuery.toLowerCase()),
-          )
-          .toList();
+  Future<void> _loadListTasks({bool reset = false, bool showLoading = true}) async {
+    if (reset) {
+      _listOffset = 0;
+      _listHasMore = true;
+      if (showLoading) setState(() => _isLoading = true);
+    } else {
+      if (!_listHasMore || _isListLoadingMore) return;
+      setState(() => _isListLoadingMore = true);
     }
 
-    switch (_taskFilter) {
-      case 'my_tasks':
-        final userId = context.read<SessionProvider>().userId;
-        return list.where((t) => t.userIds.contains(userId)).toList();
-      case 'in_progress':
-        return list.where((t) => t.state == 'in_progress').toList();
-      case 'done':
-        return list.where((t) => t.state == 'done').toList();
-      case 'blocked':
-        return list.where((t) => t.kanbanState == 1).toList();
-      case 'overdue':
-        return list.where((t) => t.isOverdue).toList();
-      default:
-        return list;
+    try {
+      final provider = context.read<ProjectProvider>();
+      final newTasks = await provider.loadTasksForProject(
+        widget.project.id,
+        offset: _listOffset,
+        limit: 50,
+        searchQuery: _searchQuery,
+        filterState: _taskFilter,
+      );
+
+      setState(() {
+        if (reset) {
+          _listTasks = newTasks;
+        } else {
+          _listTasks.addAll(newTasks);
+        }
+        _listOffset += newTasks.length;
+        _listHasMore = newTasks.length >= 50;
+      });
+    } catch (e) {
+      debugPrint('Failed to load list tasks: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _isListLoadingMore = false;
+        });
+      }
     }
+  }
+
+  Future<void> _loadAllKanbanColumns({bool reset = false}) async {
+    final futures = _stages.map((stage) => _loadKanbanColumn(stage.id, reset: reset));
+    await Future.wait(futures);
+  }
+
+  Future<void> _loadKanbanColumn(int stageId, {bool reset = false}) async {
+    final state = _kanbanState[stageId];
+    if (state == null) return;
+
+    if (reset) {
+      state.offset = 0;
+      state.hasMore = true;
+    } else {
+      if (!state.hasMore || state.isLoadingMore) return;
+    }
+
+    setState(() => state.isLoadingMore = true);
+
+    try {
+      final provider = context.read<ProjectProvider>();
+      final newTasks = await provider.loadTasksForProject(
+        widget.project.id,
+        stageId: stageId,
+        offset: state.offset,
+        limit: 20, // Load fewer items per column
+        searchQuery: _searchQuery,
+        filterState: _taskFilter,
+      );
+
+      setState(() {
+        if (reset) {
+          state.tasks = newTasks;
+        } else {
+          state.tasks.addAll(newTasks);
+        }
+        state.offset += newTasks.length;
+        state.hasMore = newTasks.length >= 20;
+      });
+    } catch (e) {
+      debugPrint('Failed to load kanban column tasks: $e');
+    } finally {
+      if (mounted) setState(() => state.isLoadingMore = false);
+    }
+  }
+
+  void _onSearchOrFilterChanged() {
+    setState(() => _isLoading = true);
+    Future.wait([
+      _loadListTasks(reset: true, showLoading: false),
+      _loadAllKanbanColumns(reset: true),
+    ]).then((_) {
+      if (mounted) setState(() => _isLoading = false);
+    });
   }
 
   @override
@@ -254,33 +360,64 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
   Widget _buildProjectDetails(ThemeData theme, bool isDark) {
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.symmetric(vertical: 20),
+      padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
       children: [
         _detailItem(
           'Customer',
           widget.project.partnerName ?? 'N/A',
           PhosphorIconsRegular.user,
         ),
+        if (widget.project.userLogin != null)
+          _detailItem(
+            'Project Manager',
+            widget.project.userLogin!,
+            PhosphorIconsRegular.userFocus,
+          ),
+        if (widget.project.companyName != null)
+          _detailItem(
+            'Company',
+            widget.project.companyName!,
+            PhosphorIconsRegular.buildings,
+          ),
         _detailItem(
-          'Status',
-          _statusLabel(widget.project.lastUpdateStatus),
+          'Status / Stage',
+          widget.project.stage ?? 'No Stage',
           PhosphorIconsRegular.info,
         ),
-        _detailItem(
-          'Planned Date',
-          widget.project.date ?? 'N/A',
-          PhosphorIconsRegular.calendar,
-        ),
+        if (widget.project.privacy != null)
+          _detailItem(
+            'Visibility',
+            widget.project.privacy!,
+            PhosphorIconsRegular.lockKey,
+          ),
+        if (widget.project.date != null)
+          _detailItem(
+            'Planned Date',
+            widget.project.date!,
+            PhosphorIconsRegular.calendar,
+          ),
+        if (widget.project.createDate != null)
+          _detailItem(
+            'Created On',
+            DateFormat('yyyy-MM-dd').format(widget.project.createDate!),
+            PhosphorIconsRegular.clock,
+          ),
         _detailItem(
           'Total Tasks',
           '${widget.project.taskCount}',
           PhosphorIconsRegular.listChecks,
         ),
-        if (widget.project.allocatedHours != null)
+        if (widget.project.allocatedHours != null && widget.project.allocatedHours! > 0)
           _detailItem(
             'Allocated Hours',
-            '${widget.project.allocatedHours}h',
-            PhosphorIconsRegular.clock,
+            '${widget.project.allocatedHours!.toStringAsFixed(2)}h',
+            PhosphorIconsRegular.hourglass,
+          ),
+        if (widget.project.effectiveHours != null && widget.project.effectiveHours! > 0)
+          _detailItem(
+            'Effective Hours',
+            '${widget.project.effectiveHours!.toStringAsFixed(2)}h',
+            PhosphorIconsRegular.timer,
           ),
       ],
     );
@@ -290,42 +427,38 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(icon, size: 20, color: AppColors.primary.withValues(alpha: 0.6)),
           const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: GoogleFonts.poppins(fontSize: 10, color: Colors.grey),
-              ),
-              Text(
-                value,
-                style: GoogleFonts.poppins(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: GoogleFonts.poppins(fontSize: 10, color: Colors.grey),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ),
-            ],
+                Text(
+                  value,
+                  style: GoogleFonts.poppins(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  String _statusLabel(String? status) {
-    switch (status) {
-      case 'on_track':
-        return 'On Track';
-      case 'at_risk':
-        return 'At Risk';
-      case 'off_track':
-        return 'Off Track';
-      default:
-        return 'No Status';
-    }
-  }
+
 
   Widget _buildTaskList(ThemeData theme) {
     if (_isLoading) {
@@ -345,24 +478,32 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
           child: SearchFilterBar<String>(
             controller: _searchController,
             hintText: 'Search tasks...',
-            onChanged: (v) => setState(() => _searchQuery = v),
+            onChanged: (v) {
+              _searchQuery = v;
+              _onSearchOrFilterChanged();
+            },
             onClear: () {
               _searchController.clear();
-              setState(() => _searchQuery = '');
+              _searchQuery = '';
+              _onSearchOrFilterChanged();
             },
             currentFilter: _taskFilter,
-            onFilterChanged: (val) => setState(() => _taskFilter = val),
-            filters: const [
-              SearchFilterItem(value: 'all', label: 'All Tasks'),
-              SearchFilterItem(value: 'my_tasks', label: 'My Tasks'),
-              SearchFilterItem(value: 'in_progress', label: 'In Progress'),
-              SearchFilterItem(value: 'done', label: 'Completed'),
+            onFilterChanged: (val) {
+              _taskFilter = val;
+              _onSearchOrFilterChanged();
+            },
+            filters: [
+              const SearchFilterItem(value: 'all', label: 'All Tasks'),
+              const SearchFilterItem(value: 'my_tasks', label: 'My Tasks'),
+              ..._stages.map(
+                (s) => SearchFilterItem(value: 'stage_${s.id}', label: s.name),
+              ),
             ],
           ),
         ),
         const SizedBox(height: 8),
         Expanded(
-          child: _filteredTasks.isEmpty
+          child: _listTasks.isEmpty
               ? Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -386,11 +527,34 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
                     ],
                   ),
                 )
-              : ListView.builder(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  padding: const EdgeInsets.only(top: 16, bottom: 80, left: 16, right: 16),
-                  itemCount: _filteredTasks.length,
-                  itemBuilder: (_, i) => _TaskListItem(task: _filteredTasks[i]),
+              : NotificationListener<ScrollNotification>(
+                  onNotification: (ScrollNotification scrollInfo) {
+                    if (!_isListLoadingMore &&
+                        _listHasMore &&
+                        scrollInfo.metrics.pixels >=
+                            scrollInfo.metrics.maxScrollExtent - 200) {
+                      _loadListTasks();
+                    }
+                    return false;
+                  },
+                  child: ListView.builder(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.only(
+                        top: 16, bottom: 80, left: 16, right: 16),
+                    itemCount: _listTasks.length + (_isListLoadingMore ? 1 : 0),
+                    itemBuilder: (_, i) {
+                      if (i == _listTasks.length) {
+                        return const Padding(
+                          padding: EdgeInsets.all(16.0),
+                          child: Center(
+                            child: CircularProgressIndicator(
+                                color: AppColors.primary),
+                          ),
+                        );
+                      }
+                      return _TaskListItem(task: _listTasks[i]);
+                    },
+                  ),
                 ),
         ),
       ],
@@ -414,8 +578,12 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
             itemCount: _stages.length,
             itemBuilder: (_, i) {
               final stage = _stages[i];
-        final stageTasks = _tasks.where((t) => t.stageId == stage.id).toList();
-              return _KanbanColumn(stage: stage, tasks: stageTasks);
+              final state = _kanbanState[stage.id];
+              if (state == null) return const SizedBox();
+              return _KanbanColumn(
+                state: state,
+                onLoadMore: () => _loadKanbanColumn(stage.id),
+              );
             },
     );
   }
@@ -542,6 +710,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
                                   alpha: 0.4,
                                 ),
                               ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
                             const SizedBox(height: 4),
                             Text(
@@ -551,6 +721,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
                                 fontWeight: FontWeight.w500,
                                 color: theme.colorScheme.onSurface,
                               ),
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ],
                         );
@@ -569,17 +741,16 @@ class _TaskListItem extends StatelessWidget {
 
   const _TaskListItem({required this.task});
 
-  Color _stateColor(String? state) {
-    switch (state) {
-      case 'in_progress':
-        return AppColors.statusInProgress;
-      case 'done':
-        return AppColors.statusDone;
-      case 'blocked':
-        return AppColors.statusBlocked;
-      default:
-        return AppColors.statusTodo;
-    }
+  Color _stateColor(String? stageName) {
+    final String label = stageName?.isNotEmpty == true ? stageName! : 'No Stage';
+    final colors = [
+      AppColors.statusTodo,
+      AppColors.statusInProgress,
+      AppColors.statusDone,
+      AppColors.statusReview,
+      AppColors.accentPink,
+    ];
+    return colors[label.hashCode.abs() % colors.length];
   }
 
   @override
@@ -606,7 +777,7 @@ class _TaskListItem extends StatelessWidget {
               width: 4,
               height: 48,
               decoration: BoxDecoration(
-                color: _stateColor(task.state),
+                color: _stateColor(task.stageName),
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -641,7 +812,7 @@ class _TaskListItem extends StatelessWidget {
                   ),
                   if (task.stageName != null) ...[
                     const SizedBox(height: 4),
-                    Text(task.stageName!, style: theme.textTheme.bodySmall),
+                    Text(task.stageName!, style: theme.textTheme.bodySmall, maxLines: 1, overflow: TextOverflow.ellipsis,),
                   ],
                 ],
               ),
@@ -710,10 +881,10 @@ class _DeadlineBadge extends StatelessWidget {
 }
 
 class _KanbanColumn extends StatelessWidget {
-  final ProjectStageModel stage;
-  final List<TaskModel> tasks;
+  final KanbanColumnState state;
+  final VoidCallback onLoadMore;
 
-  const _KanbanColumn({required this.stage, required this.tasks});
+  const _KanbanColumn({required this.state, required this.onLoadMore});
 
   @override
   Widget build(BuildContext context) {
@@ -732,30 +903,33 @@ class _KanbanColumn extends StatelessWidget {
             ),
             child: Row(
               children: [
-                Text(
-                  stage.name,
-                  style: GoogleFonts.poppins(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.primary,
+                Expanded(
+                  child: Text(
+                    state.stage.name,
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.primary,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                const Spacer(),
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 6,
                     vertical: 2,
                   ),
                   decoration: BoxDecoration(
-                    color: AppColors.primary,
-                    borderRadius: BorderRadius.circular(10),
+                    color: Colors.white.withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
-                    tasks.length.toString(),
+                    state.tasks.length.toString() + (state.hasMore ? '+' : ''),
                     style: GoogleFonts.poppins(
-                      fontSize: 11,
-                      color: Colors.white,
+                      fontSize: 10,
                       fontWeight: FontWeight.w700,
+                      color: AppColors.primary,
                     ),
                   ),
                 ),
@@ -763,13 +937,32 @@ class _KanbanColumn extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          // Tasks
           Expanded(
-            child: ListView.builder(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: EdgeInsets.zero,
-              itemCount: tasks.length,
-              itemBuilder: (_, i) => _KanbanCard(task: tasks[i]),
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (ScrollNotification scrollInfo) {
+                if (!state.isLoadingMore &&
+                    state.hasMore &&
+                    scrollInfo.metrics.pixels >=
+                        scrollInfo.metrics.maxScrollExtent - 200) {
+                  onLoadMore();
+                }
+                return false;
+              },
+              child: ListView.builder(
+                padding: const EdgeInsets.only(bottom: 80),
+                itemCount: state.tasks.length + (state.isLoadingMore ? 1 : 0),
+                itemBuilder: (_, i) {
+                  if (i == state.tasks.length) {
+                    return const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 16),
+                      child: Center(
+                        child: CircularProgressIndicator(color: AppColors.primary),
+                      ),
+                    );
+                  }
+                  return _KanbanCard(task: state.tasks[i]);
+                },
+              ),
             ),
           ),
         ],

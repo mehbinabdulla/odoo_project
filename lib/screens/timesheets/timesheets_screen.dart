@@ -275,6 +275,8 @@ class _TimesheetsScreenState extends State<TimesheetsScreen> {
                           alpha: 0.7,
                         ),
                       ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                     const Spacer(),
                     Text(
@@ -436,6 +438,8 @@ class _TimesheetCard extends StatelessWidget {
                           fontSize: 14,
                           fontWeight: FontWeight.w800,
                         ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ),

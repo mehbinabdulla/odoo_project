@@ -582,6 +582,8 @@ class _TimesheetDetailScreenState extends State<TimesheetDetailScreen> with Rout
             fontWeight: FontWeight.w600,
             color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
           ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
         const SizedBox(height: 4),
         Text(
@@ -591,6 +593,8 @@ class _TimesheetDetailScreenState extends State<TimesheetDetailScreen> with Rout
             fontWeight: FontWeight.w500,
             color: theme.colorScheme.onSurface,
           ),
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
         ),
       ],
     );

@@ -379,7 +379,10 @@ class _TaskDonutChartWidgetState extends State<TaskDonutChartWidget> {
                 children: [
                   Text(
                     'Task Status',
-                    style: GoogleFonts.dmSerifDisplay(fontSize: 20),
+                    style: GoogleFonts.dmSerifDisplay(
+                      fontSize: 20,
+                      color: theme.colorScheme.onSurface,
+                    ),
                   ),
                   Text(
                     'Overall distribution of tasks',

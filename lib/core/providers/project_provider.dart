@@ -7,11 +7,12 @@ class ProjectProvider with ChangeNotifier {
   final SessionProvider sessionProvider;
 
   List<ProjectModel> _projects = [];
+  int _totalProjectCount = 0;
+  List<ProjectStageModel> _globalProjectStages = [];
   bool _isLoading = false;
   bool _isLoadingMore = false;
   bool _hasMore = true;
   int _offset = 0;
-  int _totalProjectCount = 0;
   String? _error;
   String _searchQuery = '';
   String _filterStatus = 'all'; // all, in_progress, done, blocked
@@ -22,6 +23,7 @@ class ProjectProvider with ChangeNotifier {
   bool get isLoadingMore => _isLoadingMore;
   bool get hasMore => _hasMore;
   int get totalProjectCount => _totalProjectCount;
+  List<ProjectStageModel> get globalProjectStages => _globalProjectStages;
   String? get error => _error;
   String get searchQuery => _searchQuery;
   String get filterStatus => _filterStatus;
@@ -43,6 +45,22 @@ class ProjectProvider with ChangeNotifier {
 
 
 
+  Future<void> loadGlobalProjectStages() async {
+    if (_globalProjectStages.isNotEmpty) return;
+    try {
+      final raw = await OdooRpcService.searchRead(
+        model: 'project.project.stage',
+        domain: [],
+        fields: ['id', 'name', 'sequence', 'fold'],
+        order: 'sequence asc',
+      );
+      _globalProjectStages = raw.map((e) => ProjectStageModel.fromJson(e)).toList();
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Failed to load project stages: $e');
+    }
+  }
+
   Future<void> loadProjects({bool showLoading = true, bool loadMore = false}) async {
     if (loadMore) {
       if (!_hasMore || _isLoadingMore || _isLoading) return;
@@ -55,6 +73,9 @@ class ProjectProvider with ChangeNotifier {
       _offset = 0;
       _hasMore = true;
     }
+    
+    // Ensure stages are loaded
+    await loadGlobalProjectStages();
     
     try {
       final baseDomain = <dynamic>[['active', '=', true]];
@@ -74,6 +95,9 @@ class ProjectProvider with ChangeNotifier {
       if (_filterStatus == 'my_projects') {
         final uid = sessionProvider.userId;
         if (uid != null) fetchDomain.add(['user_id', '=', uid]);
+      } else if (_filterStatus.startsWith('stage_')) {
+        final sId = int.tryParse(_filterStatus.substring(6));
+        if (sId != null) fetchDomain.add(['stage_id', '=', sId]);
       } else if (_filterStatus != 'all') {
         fetchDomain.add(['last_update_status', '=', _filterStatus]);
       }
@@ -121,13 +145,49 @@ class ProjectProvider with ChangeNotifier {
     }
   }
 
-  Future<List<TaskModel>> loadTasksForProject(int projectId) async {
+  Future<List<TaskModel>> loadTasksForProject(
+    int projectId, {
+    int offset = 0,
+    int limit = 50,
+    int? stageId,
+    String? searchQuery,
+    String? filterState,
+  }) async {
     try {
+      final domain = <dynamic>[
+        ['project_id', '=', projectId]
+      ];
+      if (stageId != null) {
+        domain.add(['stage_id', '=', stageId]);
+      }
+      if (searchQuery != null && searchQuery.isNotEmpty) {
+        domain.add(['name', 'ilike', searchQuery]);
+      }
+      if (filterState != null && filterState != 'all') {
+        if (filterState == 'my_tasks') {
+          final uid = sessionProvider.userId;
+          if (uid != null) domain.add(['user_ids', 'in', [uid]]);
+        } else if (filterState.startsWith('stage_')) {
+          final sId = int.tryParse(filterState.substring(6));
+          if (sId != null) domain.add(['stage_id', '=', sId]);
+        } else if (filterState == 'in_progress') {
+          domain.add(['state', '=', '01_in_progress']); // Or appropriate state logic
+        } else if (filterState == 'done') {
+          domain.add(['state', '=', '1_done']); // Or appropriate state logic
+        } else if (filterState == 'blocked') {
+          domain.add(['kanban_state', '=', 'blocked']);
+        } else {
+           domain.add(['state', '=', filterState]);
+        }
+      }
+
       final raw = await OdooRpcService.safeSearchRead(
         model: 'project.task',
-        domain: [['project_id', '=', projectId]],
+        domain: domain,
         fields: OdooRpcService.taskFieldCandidates,
         order: 'sequence asc, id asc',
+        limit: limit,
+        offset: offset,
       );
       return raw.map((e) => TaskModel.fromJson(e)).toList();
     } catch (e) {

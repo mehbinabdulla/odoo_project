@@ -302,6 +302,8 @@ class _ModuleCard extends StatelessWidget {
                     fontSize: 11,
                     color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 if (module.summary != null && module.summary!.isNotEmpty) ...[
                   const SizedBox(height: 4),
@@ -317,14 +319,18 @@ class _ModuleCard extends StatelessWidget {
                   Row(
                     children: [
                       if (module.author != null)
-                        Text(
-                          module.author!,
-                          style: GoogleFonts.poppins(
-                            fontSize: 10,
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                        Expanded(
+                          child: Text(
+                            module.author!,
+                            style: GoogleFonts.poppins(
+                              fontSize: 10,
+                              color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                      const Spacer(),
+                      if (module.author == null) const Spacer(),
                       Text(
                         'v${module.latestVersion!}',
                         style: GoogleFonts.poppins(

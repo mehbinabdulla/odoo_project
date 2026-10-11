@@ -100,12 +100,12 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
       },
       currentFilter: provider.filterStatus,
       onFilterChanged: (value) => provider.setFilter(value),
-      filters: const [
-        SearchFilterItem(value: 'all', label: 'All Projects'),
-        SearchFilterItem(value: 'my_projects', label: 'My Projects'),
-        SearchFilterItem(value: 'on_track', label: 'On Track'),
-        SearchFilterItem(value: 'at_risk', label: 'At Risk'),
-        SearchFilterItem(value: 'off_track', label: 'Off Track'),
+      filters: [
+        const SearchFilterItem(value: 'all', label: 'All Projects'),
+        const SearchFilterItem(value: 'my_projects', label: 'My Projects'),
+        ...provider.globalProjectStages.map(
+          (s) => SearchFilterItem(value: 'stage_${s.id}', label: s.name),
+        ),
       ],
     );
   }
@@ -220,37 +220,23 @@ class _ProjectListItem extends StatelessWidget {
     required this.onFavoriteTap,
   });
 
-  Color _statusColor(String? status) {
-    switch (status) {
-      case 'on_track':
-        return AppColors.statusDone;
-      case 'at_risk':
-        return AppColors.statusReview;
-      case 'off_track':
-        return AppColors.statusBlocked;
-      default:
-        return AppColors.statusTodo;
-    }
-  }
-
-  String _statusLabel(String? status) {
-    switch (status) {
-      case 'on_track':
-        return 'On Track';
-      case 'at_risk':
-        return 'At Risk';
-      case 'off_track':
-        return 'Off Track';
-      default:
-        return 'No Status';
-    }
+  Color _statusColor(String? stage) {
+    if (stage == null || stage.isEmpty) return AppColors.statusTodo;
+    final colors = [
+      AppColors.statusTodo,
+      AppColors.statusInProgress,
+      AppColors.statusDone,
+      AppColors.statusReview,
+      AppColors.accentPink,
+    ];
+    return colors[stage.hashCode.abs() % colors.length];
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final statusColor = _statusColor(project.lastUpdateStatus);
+    final statusColor = _statusColor(project.stage);
     final progress = (project.progressPercent / 100).clamp(0.0, 1.0);
 
     return Padding(
@@ -355,7 +341,7 @@ class _ProjectListItem extends StatelessWidget {
                     const SizedBox(width: 8),
                     _infoPill(
                       PhosphorIconsFill.circle,
-                      _statusLabel(project.lastUpdateStatus),
+                      project.stage ?? 'No Stage',
                       theme,
                       isDark,
                       iconColor: statusColor,

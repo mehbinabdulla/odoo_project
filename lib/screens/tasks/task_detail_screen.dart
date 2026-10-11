@@ -638,86 +638,90 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
                         final h = hours.floor();
                         final m = ((hours - h) * 60).round();
 
-                        return Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: isDark
-                                ? const Color(0xFF1A1A1A)
-                                : const Color(0xFFF5F5F5),
+                        final hoursFormatted = '${h}h' + (m > 0 ? ' ${m.toString().padLeft(2, '0')}m' : '');
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: ClipRRect(
                             borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Container(
-                                width: 56,
-                                height: 56,
-                                alignment: Alignment.center,
-                                decoration: BoxDecoration(
-                                  color: isDark
-                                      ? const Color(0xFF2A2020)
-                                      : AppColors.primary.withValues(
-                                          alpha: 0.1,
-                                        ),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Text(
-                                  '${h}h',
-                                  style: GoogleFonts.poppins(
-                                    color: AppColors.primary,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                  ),
-                                ),
+                            child: Container(
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: isDark ? AppColors.darkCard : AppColors.lightCard,
                               ),
-                              const SizedBox(width: 16),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      name,
-                                      style: GoogleFonts.poppins(
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 16,
+                              child: Row(
+                                children: [
+                                  // Hours badge
+                                  Container(
+                                    width: 52,
+                                    height: 52,
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        colors: [
+                                          AppColors.gradientPurple.first.withValues(
+                                            alpha: 0.15,
+                                          ),
+                                          AppColors.gradientPurple.last.withValues(alpha: 0.08),
+                                        ],
+                                        begin: Alignment.topLeft,
+                                        end: Alignment.bottomRight,
                                       ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
+                                      borderRadius: BorderRadius.circular(12),
                                     ),
-                                    const SizedBox(height: 4),
-                                    Row(
-                                      children: [
-                                        const Icon(
-                                          PhosphorIconsFill.folder,
-                                          size: 14,
-                                          color: AppColors.primary,
+                                    child: Center(
+                                      child: Text(
+                                        hoursFormatted,
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w800,
                                         ),
-                                        const SizedBox(width: 4),
-                                        Expanded(
-                                          child: Text(
-                                            project,
-                                            style: GoogleFonts.poppins(
-                                              fontSize: 12,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          name.isNotEmpty ? name : '(No description)',
+                                          style: theme.textTheme.titleSmall,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        const SizedBox(height: 3),
+                                        Row(
+                                          children: [
+                                            const Icon(
+                                              PhosphorIconsFill.folder,
+                                              size: 11,
                                               color: AppColors.primary,
                                             ),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
+                                            const SizedBox(width: 3),
+                                            Expanded(
+                                              child: Text(
+                                                project,
+                                                style: theme.textTheme.bodySmall?.copyWith(
+                                                  color: AppColors.primary,
+                                                ),
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ],
                                     ),
-                                  ],
-                                ),
+                                  ),
+                                  const SizedBox(width: 16),
+                                  Icon(
+                                    PhosphorIconsRegular.caretRight,
+                                    size: 16,
+                                    color: theme.colorScheme.onSurface.withValues(alpha: 0.3),
+                                  ),
+                                ],
                               ),
-                              const SizedBox(width: 16),
-                              Text(
-                                '${h}h ${m.toString().padLeft(2, '0')}m',
-                                style: GoogleFonts.poppins(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 14,
-                                ),
-                              ),
-                            ],
+                            ),
                           ),
                         );
                       }
@@ -732,6 +736,8 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
                           style: GoogleFonts.poppins(
                             color: theme.colorScheme.onSurface,
                           ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       );
                     },
@@ -753,6 +759,8 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
             fontWeight: FontWeight.w600,
             color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
           ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
         const SizedBox(height: 4),
         Text(
@@ -762,6 +770,8 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
             fontWeight: FontWeight.w500,
             color: theme.colorScheme.onSurface,
           ),
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
         ),
       ],
     );
@@ -882,6 +892,8 @@ class _StatusBadge extends StatelessWidget {
           color: color,
           letterSpacing: 0.5,
         ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       ),
     );
   }

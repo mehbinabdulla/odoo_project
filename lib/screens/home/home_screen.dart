@@ -523,13 +523,15 @@ class _UserMenuSheet extends StatelessWidget {
                 ),
         ),
         const SizedBox(height: 12),
-        Text(session?.userName ?? 'User', style: theme.textTheme.titleMedium),
+        Text(session?.userName ?? 'User', style: theme.textTheme.titleMedium, maxLines: 1, overflow: TextOverflow.ellipsis),
         const SizedBox(height: 4),
         Text(
           session?.userLogin ?? '',
           style: theme.textTheme.bodyMedium?.copyWith(
             color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
           ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
         const SizedBox(height: 8),
         // Server info
@@ -545,6 +547,8 @@ class _UserMenuSheet extends StatelessWidget {
               fontSize: 12,
               color: AppColors.primary,
             ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
         ),
         const SizedBox(height: 8),

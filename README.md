@@ -1,3 +1,7 @@
+# odoo_project
+
+A Flutter app for Odoo Projects, Tasks & Timesheets (JSON-RPC).
+
 # do_your_projects
 
 A new Flutter project.
