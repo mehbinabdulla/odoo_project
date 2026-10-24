@@ -77,10 +77,14 @@ class OdooFieldRegistry {
       if (result is List) {
         return result.cast<String>().toList();
       }
-      return fields; // Fallback if RPC returns unexpected format
+      // Fail closed: an unexpected RPC shape grants nothing.
+      debugPrint('OdooFieldRegistry: unexpected check_field_access_rights shape for $model; denying all.');
+      return [];
     } catch (e) {
-      // If method doesn't exist or fails, fallback to allowing all requested fields
-      return fields;
+      // Fail closed: if the check itself fails, grant nothing rather than
+      // leaking fields the user may not read.
+      debugPrint('OdooFieldRegistry: check_field_access_rights failed for $model: $e');
+      return [];
     }
   }
 
@@ -99,6 +103,7 @@ class OdooFieldRegistry {
           ['ttype', 'in', ['one2many', 'reference']],
         ],
         fields: ['name'],
+        limit: 1000,
       );
       final list = records.map((r) => r['name'] as String).toList();
       
@@ -130,7 +135,11 @@ class OdooFieldRegistry {
   // ── Internal ───────────────────────────────────────────────────────────────
 
   static Future<void> _preload(List<String> models) async {
-    await Future.wait(models.map(getFieldNames));
+    try {
+      await Future.wait(models.map(getFieldNames));
+    } catch (e) {
+      debugPrint('OdooFieldRegistry preload failed: $e');
+    }
   }
 
   /// Uses Odoo's [fields_get] RPC (not ir.model.fields) to retrieve the

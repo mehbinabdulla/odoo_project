@@ -1,10 +1,14 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/project_models.dart';
 import '../services/odoo_rpc_service.dart';
 import 'session_provider.dart';
 
 class TaskProvider with ChangeNotifier {
-  final SessionProvider sessionProvider;
+  SessionProvider sessionProvider;
+
+  Timer? _filterDebounce;
+  int _loadGen = 0;
 
   List<TaskModel> _tasks = [];
   bool _isLoading = false;
@@ -26,21 +30,42 @@ class TaskProvider with ChangeNotifier {
 
   TaskProvider({required this.sessionProvider});
 
+  /// Called by the ChangeNotifierProxyProvider `update:` callback so the
+  /// latest SessionProvider is always propagated.
+  void updateSession(SessionProvider session) {
+    sessionProvider = session;
+  }
 
+  @override
+  void dispose() {
+    _filterDebounce?.cancel();
+    super.dispose();
+  }
 
   void setSearch(String q) {
     _searchQuery = q;
-    loadTasks(showLoading: true);
+    _debouncedLoad();
   }
 
   void setFilter(String state) {
     _filterState = state;
-    loadTasks(showLoading: true);
+    _debouncedLoad();
+  }
+
+  void _debouncedLoad() {
+    _filterDebounce?.cancel();
+    // Invalidate any in-flight fresh load so its stale results are dropped.
+    _loadGen++;
+    _filterDebounce = Timer(const Duration(milliseconds: 400), () {
+      loadTasks(showLoading: true);
+    });
   }
 
 
 
   Future<void> loadTasks({bool showLoading = true, bool loadMore = false}) async {
+    // loadMore must not invalidate the in-flight fresh load's generation.
+    final int gen = loadMore ? _loadGen : ++_loadGen;
     if (loadMore) {
       if (!_hasMore || _isLoadingMore || _isLoading) return;
       _isLoadingMore = true;
@@ -86,7 +111,8 @@ class TaskProvider with ChangeNotifier {
       );
       
       final newTasks = raw.map((e) => TaskModel.fromJson(e)).toList();
-      
+
+      if (gen != _loadGen) return; // superseded by a newer request
       if (loadMore) {
         _tasks.addAll(newTasks);
       } else {

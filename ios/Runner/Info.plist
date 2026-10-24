@@ -4,6 +4,8 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Sign in quickly and securely with Face ID.</string>
 	<key>CFBundleDisplayName</key>
 	<string>Do Your Projects</string>
 	<key>CFBundleExecutable</key>

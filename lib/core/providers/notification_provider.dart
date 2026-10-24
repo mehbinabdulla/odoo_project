@@ -18,13 +18,18 @@ class NotificationProvider with ChangeNotifier {
   AppNotification? _current;
   AppNotification? get current => _current;
 
+  /// Monotonic generation so rapid show() calls can't race the delayed
+  /// clear: only the latest notification's timer may clear the state.
+  int _generation = 0;
+
   void show(String message, {AppNotificationType type = AppNotificationType.info}) {
+    final gen = ++_generation;
     _current = AppNotification(message: message, type: type);
     notifyListeners();
-    
+
     // Clear after duration
     Future.delayed(_current!.duration, () {
-      if (_current?.message == message) {
+      if (gen == _generation) {
         _current = null;
         notifyListeners();
       }

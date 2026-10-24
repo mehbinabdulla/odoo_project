@@ -8,6 +8,7 @@ import '../../core/models/project_models.dart';
 import '../../core/providers/timesheet_provider.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/search_filter_bar.dart';
+import '../../core/widgets/shimmer_card.dart';
 
 import '../../core/widgets/primary_button.dart';
 
@@ -40,7 +41,6 @@ class _TimesheetsScreenState extends State<TimesheetsScreen> {
     final provider = context.watch<TimesheetProvider>();
     final theme = Theme.of(context);
 
-
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
       child: RefreshIndicator(
@@ -50,7 +50,8 @@ class _TimesheetsScreenState extends State<TimesheetsScreen> {
           onNotification: (ScrollNotification scrollInfo) {
             if (!provider.isLoadingMore &&
                 provider.hasMore &&
-                scrollInfo.metrics.pixels >= scrollInfo.metrics.maxScrollExtent - 200) {
+                scrollInfo.metrics.pixels >=
+                    scrollInfo.metrics.maxScrollExtent - 200) {
               provider.loadTimesheets(loadMore: true);
             }
             return false;
@@ -60,37 +61,36 @@ class _TimesheetsScreenState extends State<TimesheetsScreen> {
               parent: BouncingScrollPhysics(),
             ),
             slivers: [
-            SliverAppBar(
-              floating: true,
-              snap: true,
-              automaticallyImplyLeading: false,
-              backgroundColor: theme.scaffoldBackgroundColor,
-              elevation: 0,
-              toolbarHeight: 112,
-              flexibleSpace: FlexibleSpaceBar(
-                background: Column(
-                  children: [
-                    _buildUserFilter(context, provider, theme),
-                    const SizedBox(height: 16),
-                  ],
-                ),
-              ),
-            ),
-            _buildTimesheetList(context, provider, theme),
-            if (provider.isLoadingMore)
-              const SliverToBoxAdapter(
-                child: Padding(
-                  padding: EdgeInsets.symmetric(vertical: 24),
-                  child: Center(
-                    child: CircularProgressIndicator(),
+              SliverAppBar(
+                floating: true,
+                snap: true,
+                automaticallyImplyLeading: false,
+                backgroundColor: theme.scaffoldBackgroundColor,
+                elevation: 0,
+                toolbarHeight: 112,
+                flexibleSpace: FlexibleSpaceBar(
+                  background: Column(
+                    children: [
+                      _buildUserFilter(context, provider, theme),
+                      const SizedBox(height: 16),
+                    ],
                   ),
                 ),
               ),
-            const SliverToBoxAdapter(child: SizedBox(height: 100)),
-          ],
+              _buildTimesheetList(context, provider, theme),
+              if (provider.isLoadingMore)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                ),
+              const SliverToBoxAdapter(child: SizedBox(height: 100)),
+            ],
+          ),
         ),
       ),
-    ));
+    );
   }
 
   Widget _buildUserFilter(
@@ -105,12 +105,10 @@ class _TimesheetsScreenState extends State<TimesheetsScreen> {
       hintText: 'Search timesheets...',
       onChanged: (v) {
         provider.setSearch(v);
-        setState(() {});
       },
       onClear: () {
         _searchController.clear();
         provider.setSearch('');
-        setState(() {});
       },
       currentFilter: provider.filterUserId,
       onFilterChanged: (value) {
@@ -179,7 +177,7 @@ class _TimesheetsScreenState extends State<TimesheetsScreen> {
     if (provider.isLoading) {
       return SliverList(
         delegate: SliverChildBuilderDelegate(
-          (_, __) => const _TimesheetSkeleton(),
+          (_, __) => const ShimmerCard(height: 80, borderRadius: 16),
           childCount: 6,
         ),
       );
@@ -338,12 +336,11 @@ class _TimesheetsScreenState extends State<TimesheetsScreen> {
         ],
       ),
     );
-    if (confirm == true && context.mounted) {
+    if (!context.mounted) return;
+    if (confirm == true) {
       await context.read<TimesheetProvider>().deleteTimesheet(id);
     }
   }
-
-
 
   String _friendlyDate(String dateStr) {
     try {
@@ -384,7 +381,6 @@ class _TimesheetCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final theme = Theme.of(context);
 
     return Padding(
@@ -404,199 +400,128 @@ class _TimesheetCard extends StatelessWidget {
             onDelete();
             return false;
           },
-          child: GestureDetector(
-            onTap: onTap,
-            onLongPress: onEdit,
-            child: Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: isDark ? AppColors.darkCard : AppColors.lightCard,
-              ),
-              child: Row(
-                children: [
-                  // Hours badge
-                  Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          AppColors.gradientPurple.first.withValues(
-                            alpha: 0.15,
-                          ),
-                          AppColors.gradientPurple.last.withValues(alpha: 0.08),
-                        ],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Center(
-                      child: Text(
-                        timesheet.hoursFormatted,
-                        style: GoogleFonts.poppins(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w800,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+          child: Semantics(
+            button: true,
+            label:
+                'Open timesheet ${timesheet.name?.isNotEmpty == true ? timesheet.name! : timesheet.hoursFormatted}',
+            child: Material(
+              color: theme.cardTheme.color,
+              child: InkWell(
+                onTap: onTap,
+                onLongPress: onEdit,
+                child: Tooltip(
+                  message: 'Open timesheet details. Long-press to edit.',
+                  child: Container(
+                    padding: const EdgeInsets.all(14),
+                    child: Row(
                       children: [
-                        Text(
-                          timesheet.name?.isNotEmpty == true
-                              ? timesheet.name!
-                              : '(No description)',
-                          style: theme.textTheme.titleSmall,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 3),
-                        Row(
-                          children: [
-                            const Icon(
-                              PhosphorIconsFill.folder,
-                              size: 11,
-                              color: AppColors.primary,
-                            ),
-                            const SizedBox(width: 3),
-                            Expanded(
-                              child: Text(
-                                timesheet.projectName ?? 'No project',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: AppColors.primary,
+                        // Hours badge
+                        Container(
+                          width: 52,
+                          height: 52,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [
+                                AppColors.gradientPurple.first.withValues(
+                                  alpha: 0.15,
                                 ),
+                                AppColors.gradientPurple.last.withValues(
+                                  alpha: 0.08,
+                                ),
+                              ],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Center(
+                            child: Text(
+                              timesheet.hoursFormatted,
+                              style: GoogleFonts.poppins(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w800,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                timesheet.name?.isNotEmpty == true
+                                    ? timesheet.name!
+                                    : '(No description)',
+                                style: theme.textTheme.titleSmall,
+                                maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
-                            ),
-                          ],
-                        ),
-                        if (timesheet.taskName != null) ...[
-                          const SizedBox(height: 2),
-                          Row(
-                            children: [
-                              Icon(
-                                PhosphorIconsRegular.checkCircle,
-                                size: 11,
-                                color: isDark
-                                    ? Colors.white70
-                                    : AppColors.accent,
-                              ),
-                              const SizedBox(width: 3),
-                              Expanded(
-                                child: Text(
-                                  timesheet.taskName!,
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: isDark
-                                        ? Colors.white70
-                                        : AppColors.accent,
+                              const SizedBox(height: 3),
+                              Row(
+                                children: [
+                                  const Icon(
+                                    PhosphorIconsFill.folder,
+                                    size: 11,
+                                    color: AppColors.primary,
                                   ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
+                                  const SizedBox(width: 3),
+                                  Expanded(
+                                    child: Text(
+                                      timesheet.projectName ?? 'No project',
+                                      style: theme.textTheme.bodySmall
+                                          ?.copyWith(color: AppColors.primary),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
                               ),
+                              if (timesheet.taskName != null) ...[
+                                const SizedBox(height: 2),
+                                Row(
+                                  children: [
+                                    Icon(
+                                      PhosphorIconsRegular.checkCircle,
+                                      size: 11,
+                                      color: theme.colorScheme.onSurface
+                                          .withValues(alpha: 0.6),
+                                    ),
+                                    const SizedBox(width: 3),
+                                    Expanded(
+                                      child: Text(
+                                        timesheet.taskName!,
+                                        style: theme.textTheme.bodySmall
+                                            ?.copyWith(
+                                              color: theme.colorScheme.onSurface
+                                                  .withValues(alpha: 0.6),
+                                            ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ],
                           ),
-                        ],
+                        ),
+                        const SizedBox(width: 8),
+                        Icon(
+                          PhosphorIconsRegular.caretRight,
+                          size: 18,
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.25,
+                          ),
+                        ),
                       ],
                     ),
                   ),
-                  const SizedBox(width: 16),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      // Text(
-                      //   timesheet.hoursFormatted,
-                      //   style: GoogleFonts.poppins(
-                      //     fontSize: 13,
-                      //     fontWeight: FontWeight.w700,
-                      //   ),
-                      // ),
-                      // const SizedBox(),
-                      Icon(
-                        PhosphorIconsRegular.caretRight,
-                        size: 18,
-                        color: theme.colorScheme.onSurface.withValues(
-                          alpha: 0.25,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+                ),
               ),
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-// ── Skeleton ───────────────────────────────────────────────────────────────────
-
-class _TimesheetSkeleton extends StatelessWidget {
-  const _TimesheetSkeleton();
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final baseColor = isDark ? Colors.white10 : Colors.black12;
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: isDark ? AppColors.darkCard : AppColors.lightCard,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 52,
-            height: 52,
-            decoration: BoxDecoration(
-              color: baseColor,
-              borderRadius: BorderRadius.circular(12),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  height: 14,
-                  decoration: BoxDecoration(
-                    color: baseColor,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Container(
-                  width: 120,
-                  height: 10,
-                  decoration: BoxDecoration(
-                    color: baseColor,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 24),
-          Container(
-            width: 40,
-            height: 14,
-            decoration: BoxDecoration(
-              color: baseColor,
-              borderRadius: BorderRadius.circular(4),
-            ),
-          ),
-        ],
       ),
     );
   }

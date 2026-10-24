@@ -1,10 +1,21 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/odoo_session_model.dart';
+import '../services/client_provider.dart';
 import '../services/odoo_rpc_service.dart';
 import '../services/odoo_field_registry.dart';
 
 class SessionProvider with ChangeNotifier {
+  static const _secureStorage = FlutterSecureStorage();
+  // Saved-credential keys from the login screen: non-secrets live in prefs,
+  // secrets live in secure storage.
+  static const _savedPrefsKeys = ['saved_server', 'saved_db'];
+  static const _savedSecureKeys = ['saved_login', 'saved_password'];
+
   OdooSessionModel? _session;
   bool _isInitialized = false;
   bool _isLoggingOut = false;
@@ -74,9 +85,44 @@ class SessionProvider with ChangeNotifier {
     _isLoggingOut = true;
     notifyListeners();
 
+    // Best-effort server-side session destroy; never blocks logout.
     try {
+      final baseUrl = _session?.serverUrl;
+      final sid = _session?.sessionId;
+      if (baseUrl != null && baseUrl.isNotEmpty) {
+        final client = buildHttpClient();
+        try {
+          await client.post(
+            Uri.parse('$baseUrl/web/session/destroy'),
+            headers: {
+              'Content-Type': 'application/json',
+              if (sid != null && sid.isNotEmpty) 'Cookie': 'session_id=$sid',
+            },
+            body: jsonEncode({
+              'jsonrpc': '2.0',
+              'method': 'call',
+              'params': {},
+            }),
+          ).timeout(const Duration(seconds: 8));
+        } finally {
+          client.close();
+        }
+      }
+    } catch (_) {}
+
+    // Remove only session/auth keys; leave unrelated prefs intact.
+    try {
+      await OdooSessionModel.clearStored();
       final prefs = await SharedPreferences.getInstance();
-      await prefs.clear();
+      for (final key in _savedPrefsKeys) {
+        await prefs.remove(key);
+      }
+      // Legacy plain-text copies of saved secrets (migrated to secure).
+      await prefs.remove('saved_login');
+      await prefs.remove('saved_password');
+      for (final key in _savedSecureKeys) {
+        await _secureStorage.delete(key: key);
+      }
     } catch (_) {}
 
     OdooRpcService.clearSession();
@@ -89,6 +135,7 @@ class SessionProvider with ChangeNotifier {
     _session = session;
     _isSessionExpired = false;
     OdooRpcService.setSession(session);
+    unawaited(session.saveToPrefs().catchError((_) {}));
     notifyListeners();
   }
 

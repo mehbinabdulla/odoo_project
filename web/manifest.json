@@ -1,11 +1,11 @@
 {
-    "name": "do_your_projects",
-    "short_name": "do_your_projects",
+    "name": "Do Your Projects",
+    "short_name": "Projects",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#F4F4F4",
+    "theme_color": "#EA3E36",
+    "description": "Do Your Projects — Odoo projects, tasks and timesheets companion app.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

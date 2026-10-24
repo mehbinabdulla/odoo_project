@@ -9,6 +9,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/services/odoo_field_registry.dart';
 import '../../core/services/odoo_rpc_service.dart';
 import '../../core/widgets/collapsing_app_bar_page.dart';
+import '../../core/widgets/odoo_detail_sections.dart';
 import '../../core/utils/route_observer.dart';
 import 'package:flutter_widget_from_html/flutter_widget_from_html.dart';
 import 'task_form_screen.dart';
@@ -39,6 +40,15 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
     'date_deadline',
   };
 
+  // Header-level fields rendered above the grid, not inside it.
+  static const Set<String> _headerFields = {
+    'name',
+    'description',
+    'state',
+    'priority',
+    'kanban_state',
+  };
+
   @override
   void initState() {
     super.initState();
@@ -67,96 +77,25 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
         fields: _fieldDefs.keys.toList(),
         limit: 1,
       );
+      if (!mounted) return;
 
       if (records.isNotEmpty) {
-        final data = records[0];
-        
-        for (final key in _fieldDefs.keys) {
-          final type = _fieldDefs[key]['type'];
-          final val = data[key];
-
-          if (val == null || val == false || val == '') continue;
-          
-          _rawValues[key] = val; // Store the raw Odoo value (e.g. '1' for priority)
-
-          if (type == 'many2one' && val is List && val.length == 2) {
-            _fieldValues[key] = val[1];
-          } else if ((type == 'many2many' || type == 'one2many') &&
-              val is List &&
-              val.isNotEmpty) {
-            final relation = _fieldDefs[key]['relation'];
-            if (relation != null) {
-              try {
-                List<String> fieldsToFetch = ['display_name', 'name'];
-                if (relation == 'account.analytic.line') {
-                  fieldsToFetch = [
-                    'display_name',
-                    'name',
-                    'project_id',
-                    'unit_amount',
-                  ];
-                }
-
-                final relRecords = await OdooRpcService.searchRead(
-                  model: relation,
-                  domain: [
-                    ['id', 'in', val],
-                  ],
-                  fields: fieldsToFetch,
-                );
-
-                if (type == 'one2many') {
-                  _fieldValues[key] = relRecords;
-                } else {
-                  final names = relRecords
-                      .map((r) => r['display_name'] ?? r['name'] ?? 'Unknown')
-                      .toList();
-                  _fieldValues[key] = names.join(', ');
-                }
-              } catch (_) {
-                if (type == 'one2many') {
-                  _fieldValues[key] = List.generate(
-                    val.length,
-                    (i) => 'Record ${val[i]}',
-                  );
-                } else {
-                  _fieldValues[key] = '${val.length} records';
-                }
-              }
-            }
-          } else if (type == 'date' || type == 'datetime') {
-            final parsed = DateTime.tryParse(val.toString());
-            if (parsed != null) {
-              _fieldValues[key] = parsed.toString().split(' ')[0];
-            }
-          } else if (type == 'selection') {
-            final selectionDef = _fieldDefs[key]['selection'] as List?;
-            if (selectionDef != null) {
-              final match = selectionDef.firstWhere(
-                (e) => e[0] == val,
-                orElse: () => [val, val.toString()],
-              );
-              _fieldValues[key] = match[1];
-            }
-          } else {
-            if (val is List && val.isEmpty) continue;
-            _fieldValues[key] = val.toString();
-          }
-
-          // Decide if this field belongs in the dynamic grid or the header
-          final isHeaderField = (key == 'name' || 
-                                 key == 'description' || 
-                                 key == 'state' || 
-                                 key == 'priority' || 
-                                 key == 'kanban_state');
-          
-          if (!isHeaderField && _fieldValues[key] != null) {
+        final valued = await OdooDetailSections.parseDetailRecord(
+          data: records[0],
+          fieldDefs: _fieldDefs,
+          out: _fieldValues,
+          rawOut: _rawValues,
+        );
+        if (!mounted) return;
+        for (final key in valued) {
+          if (!_headerFields.contains(key)) {
             _visibleFields.add(key);
           }
         }
       }
     } catch (e) {
       // Fallback
+      if (!mounted) return;
       _fieldValues['project_id'] = widget.task.projectName;
       _fieldValues['user_ids'] = widget.task.userNames.join(', ');
       _fieldValues['tag_ids'] = widget.task.tagNames.join(', ');
@@ -175,7 +114,6 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
 
     return CollapsingAppBarPage(
       title: _fieldValues['name'] ?? widget.task.name,
@@ -196,6 +134,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
           IconButton(
             onPressed: () => Navigator.pop(context),
             icon: const Icon(PhosphorIconsBold.caretLeft, size: 20),
+            tooltip: 'Back',
           ),
         ],
       ),
@@ -210,6 +149,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
             );
           },
           icon: const Icon(PhosphorIconsBold.pencilSimple, size: 20),
+          tooltip: 'Edit Task',
         ),
         if (!_isLoading)
           PopupMenuButton<String>(
@@ -218,7 +158,8 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
               color: theme.colorScheme.onSurface,
               size: 20,
             ),
-            color: isDark ? const Color(0xFF1A1A1A) : const Color(0xFFF5F5F5),
+            tooltip: 'More options',
+            color: theme.cardTheme.color,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
             ),
@@ -317,7 +258,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
                                   : PhosphorIconsRegular.star,
                               size: 20,
                               color: _isStarFilled(i)
-                                  ? Colors.amber
+                                  ? AppColors.statusReview
                                   : theme.colorScheme.onSurface
                                         .withValues(alpha: 0.2),
                             ),
@@ -331,231 +272,24 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
                   // Odoo Style Grid layout for fields
                   Builder(
                     builder: (context) {
-                      final orderedFields = _visibleFields
-                          .where((f) => _fieldDefs.containsKey(f))
-                          .toList();
-                      orderedFields.sort((a, b) {
-                        final aDef = _defaultFields.contains(a);
-                        final bDef = _defaultFields.contains(b);
-                        if (aDef && !bDef) return -1;
-                        if (!aDef && bDef) return 1;
-                        if (aDef && bDef) {
-                          return _defaultFields
-                              .toList()
-                              .indexOf(a)
-                              .compareTo(_defaultFields.toList().indexOf(b));
-                        }
-                        final aStr = _fieldDefs[a]?['string'] ?? a;
-                        final bStr = _fieldDefs[b]?['string'] ?? b;
-                        return aStr.toString().compareTo(bStr.toString());
-                      });
+                      final orderedFields =
+                          OdooDetailSections.orderedDetailFields(
+                        visible: _visibleFields,
+                        fieldDefs: _fieldDefs,
+                        defaultFields: _defaultFields,
+                      );
+                      final groups = OdooDetailSections.groupDetailFields(
+                        ordered: orderedFields,
+                        fieldDefs: _fieldDefs,
+                      );
 
-                      final dateFields = <String>[];
-                      final metricFields = <String>[];
-                      final booleanFields = <String>[];
-                      final otherFields = <String>[];
-
-                      for (final f in orderedFields) {
-                        final type = _fieldDefs[f]?['type'];
-                        if (type == 'date' || type == 'datetime') {
-                          dateFields.add(f);
-                        } else if (type == 'integer' ||
-                            type == 'float' ||
-                            type == 'monetary') {
-                          metricFields.add(f);
-                        } else if (type == 'boolean') {
-                          booleanFields.add(f);
-                        } else {
-                          otherFields.add(f);
-                        }
-                      }
-
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (metricFields.isNotEmpty) ...[
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 24),
-                              child: Text(
-                                'Metrics',
-                                style: GoogleFonts.dmSerifDisplay(
-                                  fontSize: 20,
-                                  color: theme.colorScheme.onSurface,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            SizedBox(
-                              height: 110,
-                              child: ListView.builder(
-                                scrollDirection: Axis.horizontal,
-                                padding: const EdgeInsets.symmetric(horizontal: 24),
-                                clipBehavior: Clip.none,
-                                itemCount: metricFields.length,
-                                itemBuilder: (ctx, i) {
-                                  final f = metricFields[i];
-                                  return Padding(
-                                    padding: const EdgeInsets.only(right: 12),
-                                    child: _infoCard(
-                                      _fieldDefs[f]['string'] ?? f,
-                                      _fieldValues[f].toString(),
-                                      PhosphorIconsRegular.chartBar,
-                                      theme,
-                                      isDark,
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                            const SizedBox(height: 32),
-                          ],
-
-                          if (dateFields.isNotEmpty) ...[
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 24),
-                              child: Text(
-                                'Timeline',
-                                style: GoogleFonts.dmSerifDisplay(
-                                  fontSize: 20,
-                                  color: theme.colorScheme.onSurface,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 24),
-                              child: Wrap(
-                                spacing: 12,
-                                runSpacing: 12,
-                                children: dateFields.map((f) {
-                                  return Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                      vertical: 12,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      border: Border.all(
-                                        color: theme.dividerColor.withValues(
-                                          alpha: 0.5,
-                                        ),
-                                      ),
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(
-                                          PhosphorIconsRegular.calendar,
-                                          size: 18,
-                                          color: AppColors.primary,
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              _fieldDefs[f]['string'] ?? f,
-                                              style: GoogleFonts.poppins(
-                                                fontSize: 10,
-                                                color: theme.colorScheme.onSurface
-                                                    .withValues(alpha: 0.5),
-                                              ),
-                                            ),
-                                            Text(
-                                              _fieldValues[f].toString(),
-                                              style: GoogleFonts.poppins(
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                }).toList(),
-                              ),
-                            ),
-                            const SizedBox(height: 32),
-                          ],
-
-                          if (booleanFields.isNotEmpty) ...[
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 24),
-                              child: Text(
-                                'Flags',
-                                style: GoogleFonts.dmSerifDisplay(
-                                  fontSize: 20,
-                                  color: theme.colorScheme.onSurface,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 24),
-                              child: Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: booleanFields.map((f) {
-                                  return Chip(
-                                    avatar: const Icon(
-                                      PhosphorIconsFill.checkCircle,
-                                      color: Colors.green,
-                                      size: 18,
-                                    ),
-                                    label: Text(
-                                      _fieldDefs[f]['string'] ?? f,
-                                      style: GoogleFonts.poppins(fontSize: 12),
-                                    ),
-                                    backgroundColor: Colors.green.withValues(
-                                      alpha: 0.1,
-                                    ),
-                                    side: BorderSide.none,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(20),
-                                    ),
-                                  );
-                                }).toList(),
-                              ),
-                            ),
-                            const SizedBox(height: 32),
-                          ],
-
-                          if (otherFields.isNotEmpty) ...[
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 24),
-                              child: Text(
-                                'Details',
-                                style: GoogleFonts.dmSerifDisplay(
-                                  fontSize: 20,
-                                  color: theme.colorScheme.onSurface,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 24),
-                              child: Column(
-                                children: otherFields.map((f) {
-                                  final valStr = _fieldValues[f]?.toString() ?? '';
-                                  return Padding(
-                                    padding: const EdgeInsets.only(bottom: 16),
-                                    child: SizedBox(
-                                      width: double.infinity,
-                                      child: _fieldRow(
-                                        _fieldDefs[f]['string'] ?? f,
-                                        valStr.isEmpty ? 'None' : valStr,
-                                        theme,
-                                        isDark,
-                                      ),
-                                    ),
-                                  );
-                                }).toList(),
-                              ),
-                            ),
-                          ],
-                        ],
+                      return OdooDetailGroups(
+                        fieldDefs: _fieldDefs,
+                        fieldValues: _fieldValues,
+                        metricFields: groups['metrics']!,
+                        dateFields: groups['dates']!,
+                        booleanFields: groups['booleans']!,
+                        otherFields: groups['other']!,
                       );
                     },
                   ),
@@ -586,10 +320,11 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
                 color: theme.colorScheme.onSurface,
               ),
               onPressed: () => Navigator.pop(context),
+              tooltip: 'Back',
               style: IconButton.styleFrom(
-                backgroundColor: isDark
-                    ? Colors.white.withValues(alpha: 0.05)
-                    : Colors.black.withValues(alpha: 0.03),
+                backgroundColor: theme.colorScheme.onSurface.withValues(
+                  alpha: isDark ? 0.05 : 0.03,
+                ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -638,7 +373,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
                         final h = hours.floor();
                         final m = ((hours - h) * 60).round();
 
-                        final hoursFormatted = '${h}h' + (m > 0 ? ' ${m.toString().padLeft(2, '0')}m' : '');
+                        final hoursFormatted = '${h}h${m > 0 ? ' ${m.toString().padLeft(2, '0')}m' : ''}';
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 8),
                           child: ClipRRect(
@@ -646,7 +381,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
                             child: Container(
                               padding: const EdgeInsets.all(14),
                               decoration: BoxDecoration(
-                                color: isDark ? AppColors.darkCard : AppColors.lightCard,
+                                color: theme.cardTheme.color,
                               ),
                               child: Row(
                                 children: [
@@ -748,91 +483,12 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
     );
   }
 
-  Widget _fieldRow(String label, String value, ThemeData theme, bool isDark) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: GoogleFonts.poppins(
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
-          ),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: GoogleFonts.poppins(
-            fontSize: 14,
-            fontWeight: FontWeight.w500,
-            color: theme.colorScheme.onSurface,
-          ),
-          maxLines: 3,
-          overflow: TextOverflow.ellipsis,
-        ),
-      ],
-    );
-  }
-
-  Widget _infoCard(
-    String label,
-    String value,
-    IconData icon,
-    ThemeData theme,
-    bool isDark,
-  ) {
-    return Container(
-      width: 130,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: isDark ? AppColors.darkCard : AppColors.lightCard,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: theme.dividerColor.withValues(alpha: isDark ? 0.05 : 0.5),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(
-            icon,
-            size: 20,
-            color: AppColors.primary,
-          ),
-          const Spacer(),
-          Text(
-            label,
-            style: GoogleFonts.poppins(
-              fontSize: 10,
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          Text(
-            value,
-            style: GoogleFonts.poppins(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              color: theme.colorScheme.onSurface,
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
-      ),
-    );
-  }
-
   bool _isStarFilled(int index) {
     // Priority '1' in Odoo usually means "Starred" (1 star).
     // If your Odoo has multiple priority levels (0, 1, 2, 3), this maps them.
-    final rawPriority = _rawValues['priority']?.toString() ?? 
+    final rawPriority = _rawValues['priority']?.toString() ??
                         (widget.task.isHighPriority ? '1' : '0');
-    
+
     final priorityInt = int.tryParse(rawPriority) ?? 0;
     return priorityInt > index;
   }

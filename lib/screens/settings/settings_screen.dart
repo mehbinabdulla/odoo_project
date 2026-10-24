@@ -31,6 +31,7 @@ class SettingsScreen extends StatelessWidget {
         leading: IconButton(
           onPressed: () => Navigator.pop(context),
           icon: const Icon(PhosphorIconsBold.caretLeft, size: 20),
+          tooltip: 'Back',
         ),
       ),
       body: ListView(
@@ -142,26 +143,29 @@ class SettingsScreen extends StatelessWidget {
   }
 
   void _confirmLogout(BuildContext context) {
+    // Capture Navigator/dependencies before the dialog so the outer
+    // context is never used across the async logout gap.
+    final navigator = Navigator.of(context);
+    final sessionProvider = context.read<SessionProvider>();
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('Sign Out'),
         content: const Text('Are you sure you want to sign out?'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('Cancel'),
           ),
           ElevatedButton(
             onPressed: () async {
-              Navigator.pop(context);
-              await context.read<SessionProvider>().logout();
-              if (context.mounted) {
-                Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute(builder: (_) => const LoginScreen()),
-                  (_) => false,
-                );
-              }
+              Navigator.pop(dialogContext);
+              await sessionProvider.logout();
+              if (!navigator.mounted) return;
+              navigator.pushAndRemoveUntil(
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                (_) => false,
+              );
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.statusBlocked,

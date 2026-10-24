@@ -65,9 +65,7 @@ class _ManageFieldsSheetState extends State<ManageFieldsSheet> {
         return Container(
           decoration: BoxDecoration(
             color: Theme.of(context).cardTheme.color,
-            borderRadius: const BorderRadius.vertical(
-              top: Radius.circular(24),
-            ),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
           ),
           child: Column(
             children: [
@@ -103,15 +101,20 @@ class _ManageFieldsSheetState extends State<ManageFieldsSheet> {
                     hintText: 'Search fields…',
                     hintStyle: GoogleFonts.poppins(
                       fontSize: 14,
-                      color: Theme.of(context)
-                          .colorScheme
-                          .onSurface
-                          .withValues(alpha: 0.35),
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.onSurface.withValues(alpha: 0.35),
                     ),
-                    prefixIcon: const Icon(PhosphorIconsRegular.magnifyingGlass, size: 20),
-                    suffixIcon: (_searchController.text.isNotEmpty || _focusNode.hasFocus)
+                    prefixIcon: const Icon(
+                      PhosphorIconsRegular.magnifyingGlass,
+                      size: 20,
+                    ),
+                    suffixIcon:
+                        (_searchController.text.isNotEmpty ||
+                            _focusNode.hasFocus)
                         ? IconButton(
                             icon: const Icon(PhosphorIconsRegular.x, size: 18),
+                            tooltip: 'Clear search',
                             onPressed: () {
                               _searchController.clear();
                               _focusNode.unfocus();
@@ -120,15 +123,17 @@ class _ManageFieldsSheetState extends State<ManageFieldsSheet> {
                           )
                         : null,
                     filled: true,
-                    fillColor: Theme.of(context).brightness == Brightness.dark
-                        ? Colors.white.withValues(alpha: 0.06)
-                        : Colors.black.withValues(alpha: 0.05),
+                    fillColor: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.06),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(14),
                       borderSide: BorderSide.none,
                     ),
-                    contentPadding:
-                        const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
                   ),
                 ),
               ),
@@ -139,10 +144,9 @@ class _ManageFieldsSheetState extends State<ManageFieldsSheet> {
                         child: Text(
                           'No fields match "${_searchController.text}"',
                           style: GoogleFonts.poppins(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurface
-                                .withValues(alpha: 0.4),
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onSurface.withValues(alpha: 0.4),
                           ),
                         ),
                       )
@@ -154,21 +158,20 @@ class _ManageFieldsSheetState extends State<ManageFieldsSheet> {
                           final def = widget.fieldDefs[key];
                           final isVisible = _currentVisibleFields.contains(key);
                           final isDefault = widget.defaultFields.contains(key);
-                          
+
                           // Custom label logic for Odoo overrides
                           String label = def?['string'] ?? key;
                           if (key == 'unit_amount') label = 'Hours Spent';
-                          
+
                           return CheckboxListTile(
-                            title: Text(
-                              label,
-                              style: GoogleFonts.poppins(),
-                            ),
+                            title: Text(label, style: GoogleFonts.poppins()),
                             subtitle: Text(
                               key,
                               style: GoogleFonts.poppins(
                                 fontSize: 10,
-                                color: Colors.grey,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurface.withValues(alpha: 0.5),
                               ),
                             ),
                             value: isVisible,
@@ -183,7 +186,9 @@ class _ManageFieldsSheetState extends State<ManageFieldsSheet> {
                                         _currentVisibleFields.remove(key);
                                       }
                                     });
-                                    widget.onVisibleFieldsChanged(_currentVisibleFields);
+                                    widget.onVisibleFieldsChanged(
+                                      _currentVisibleFields,
+                                    );
                                   },
                           );
                         },

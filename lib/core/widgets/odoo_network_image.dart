@@ -3,9 +3,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-/// A drop-in replacement for [Image.network] that uses a certificate-bypassing
-/// [HttpClient]. Use this wherever you need to load images from Odoo servers
-/// that may have self-signed certificates.
+/// A drop-in replacement for [Image.network] that loads images from Odoo
+/// servers using a default validating [HttpClient].
 ///
 /// Falls back to [errorBuilder] when the image cannot be loaded.
 class OdooNetworkImage extends StatefulWidget {
@@ -39,8 +38,7 @@ class _OdooNetworkImageState extends State<OdooNetworkImage> {
   Object? _error;
   bool _loading = true;
 
-  static final HttpClient _client = HttpClient()
-    ..badCertificateCallback = (cert, host, port) => true;
+  static final HttpClient _client = HttpClient();
 
   static final Map<String, Uint8List> _cache = {};
 

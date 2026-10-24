@@ -111,7 +111,10 @@ class _CollapsingHeaderDelegate extends SliverPersistentHeaderDelegate {
 
   @override
   double get maxExtent =>
-      topPadding + _kBarHeight + expandedHeight + (bottom?.preferredSize.height ?? 0);
+      topPadding +
+      _kBarHeight +
+      expandedHeight +
+      (bottom?.preferredSize.height ?? 0);
 
   @override
   bool shouldRebuild(_CollapsingHeaderDelegate old) =>
@@ -148,6 +151,7 @@ class _CollapsingHeaderDelegate extends SliverPersistentHeaderDelegate {
               IconButton(
                 onPressed: () => Navigator.pop(context),
                 icon: const Icon(PhosphorIconsBold.caretLeft, size: 20),
+                tooltip: 'Back',
               ),
             ],
           )

@@ -1,3 +1,5 @@
 {
-    "java.configuration.updateBuildConfiguration": "interactive"
+    "java.configuration.updateBuildConfiguration": "interactive",
+    "dart.flutterSdkPath": "/home/mehbinabdulla/flutter",
+    "dart.flutterRunLogFile": "/tmp/flutter_run.log"
 }

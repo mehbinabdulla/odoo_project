@@ -7,12 +7,11 @@ import 'package:provider/provider.dart';
 import '../../core/models/project_models.dart';
 import '../../core/providers/project_provider.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/shimmer_card.dart';
+import '../../core/widgets/status_badge.dart';
 import 'project_detail_screen.dart';
 
 import '../../core/widgets/search_filter_bar.dart';
-
-
-
 
 class ProjectsScreen extends StatefulWidget {
   const ProjectsScreen({super.key});
@@ -44,45 +43,47 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
           onNotification: (ScrollNotification scrollInfo) {
             if (!provider.isLoadingMore &&
                 provider.hasMore &&
-                scrollInfo.metrics.pixels >= scrollInfo.metrics.maxScrollExtent - 200) {
+                scrollInfo.metrics.pixels >=
+                    scrollInfo.metrics.maxScrollExtent - 200) {
               provider.loadProjects(loadMore: true);
             }
             return false;
           },
           child: CustomScrollView(
-            physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
-          slivers: [
-            SliverAppBar(
-              floating: true,
-              snap: true,
-              automaticallyImplyLeading: false,
-              backgroundColor: theme.scaffoldBackgroundColor,
-              elevation: 0,
-              toolbarHeight: 112,
-              flexibleSpace: FlexibleSpaceBar(
-                background: Column(
-                  children: [
-                    _buildSearchBar(context, provider),
-                    const SizedBox(height: 16),
-                  ],
-                ),
-              ),
+            physics: const AlwaysScrollableScrollPhysics(
+              parent: BouncingScrollPhysics(),
             ),
-            _buildBody(context, provider, theme),
-            if (provider.isLoadingMore)
-              const SliverToBoxAdapter(
-                child: Padding(
-                  padding: EdgeInsets.symmetric(vertical: 24),
-                  child: Center(
-                    child: CircularProgressIndicator(),
+            slivers: [
+              SliverAppBar(
+                floating: true,
+                snap: true,
+                automaticallyImplyLeading: false,
+                backgroundColor: theme.scaffoldBackgroundColor,
+                elevation: 0,
+                toolbarHeight: 112,
+                flexibleSpace: FlexibleSpaceBar(
+                  background: Column(
+                    children: [
+                      _buildSearchBar(context, provider),
+                      const SizedBox(height: 16),
+                    ],
                   ),
                 ),
               ),
-            const SliverToBoxAdapter(child: SizedBox(height: 100)),
-          ],
+              _buildBody(context, provider, theme),
+              if (provider.isLoadingMore)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                ),
+              const SliverToBoxAdapter(child: SizedBox(height: 100)),
+            ],
+          ),
         ),
       ),
-    ));
+    );
   }
 
   Widget _buildSearchBar(BuildContext context, ProjectProvider provider) {
@@ -91,12 +92,10 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
       hintText: 'Search projects...',
       onChanged: (v) {
         provider.setSearch(v);
-        setState(() {});
       },
       onClear: () {
         _searchController.clear();
         provider.setSearch('');
-        setState(() {});
       },
       currentFilter: provider.filterStatus,
       onFilterChanged: (value) => provider.setFilter(value),
@@ -111,15 +110,18 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
   }
 
   Widget _buildBody(
-      BuildContext context, ProjectProvider provider, ThemeData theme) {
+    BuildContext context,
+    ProjectProvider provider,
+    ThemeData theme,
+  ) {
     if (provider.isModuleMissing) {
       return const SliverToBoxAdapter(child: SizedBox.shrink());
     }
-    
+
     if (provider.isLoading) {
       return SliverList(
         delegate: SliverChildBuilderDelegate(
-          (_, i) => const _ProjectSkeleton(),
+          (_, i) => const ShimmerCard(height: 110, borderRadius: 16),
           childCount: 6,
         ),
       );
@@ -194,7 +196,8 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => ProjectDetailScreen(project: provider.projects[i]),
+                builder: (_) =>
+                    ProjectDetailScreen(project: provider.projects[i]),
               ),
             ),
             onFavoriteTap: () => provider.toggleFavorite(
@@ -220,146 +223,143 @@ class _ProjectListItem extends StatelessWidget {
     required this.onFavoriteTap,
   });
 
-  Color _statusColor(String? stage) {
-    if (stage == null || stage.isEmpty) return AppColors.statusTodo;
-    final colors = [
-      AppColors.statusTodo,
-      AppColors.statusInProgress,
-      AppColors.statusDone,
-      AppColors.statusReview,
-      AppColors.accentPink,
-    ];
-    return colors[stage.hashCode.abs() % colors.length];
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final statusColor = _statusColor(project.stage);
+    final statusColor = statusColorForLabel(project.stage);
     final progress = (project.progressPercent / 100).clamp(0.0, 1.0);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: Material(
-        color: isDark ? AppColors.darkCard : AppColors.lightCard,
-        borderRadius: BorderRadius.circular(16),
-        child: InkWell(
-          onTap: onTap,
+      child: Semantics(
+        button: true,
+        label: 'Open project ${project.name}',
+        child: Material(
+          color: theme.cardTheme.color,
           borderRadius: BorderRadius.circular(16),
-          child: Container(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    // Status Badge (similar to hours badge)
-                    Container(
-                      width: 52,
-                      height: 52,
-                      decoration: BoxDecoration(
-                        color: statusColor.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: statusColor.withValues(alpha: 0.3),
-                        ),
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            PhosphorIconsRegular.folder,
-                            color: statusColor,
-                            size: 20,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(16),
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      // Status Badge (similar to hours badge)
+                      Container(
+                        width: 52,
+                        height: 52,
+                        decoration: BoxDecoration(
+                          color: statusColor.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: statusColor.withValues(alpha: 0.3),
                           ),
-                          const SizedBox(height: 2),
-                          Text(
-                            '${(progress * 100).toInt()}%',  
-                            style: GoogleFonts.poppins(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              PhosphorIconsRegular.folder,
                               color: statusColor,
+                              size: 20,
                             ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            project.name,
-                            style: GoogleFonts.poppins(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: theme.colorScheme.onSurface,
+                            const SizedBox(height: 2),
+                            Text(
+                              '${(progress * 100).toInt()}%',
+                              style: GoogleFonts.poppins(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: statusColor,
+                              ),
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            project.partnerName ?? 'Internal Project',
-                            style: GoogleFonts.poppins(
-                              fontSize: 12,
-                              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
-                    ),
-                    // Favorite with cleaner touch
-                    IconButton(
-                      icon: Icon(
-                        project.favorite
-                            ? PhosphorIconsFill.star
-                            : PhosphorIconsRegular.star,
-                        color: project.favorite
-                            ? AppColors.accentYellow
-                            : theme.colorScheme.onSurface.withValues(alpha: 0.2),
-                      ),
-                      onPressed: onFavoriteTap,
-                      splashRadius: 20,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                // Stats row
-                Row(
-                  children: [
-                    _infoPill(
-                      PhosphorIconsRegular.checkCircle,
-                      '${project.taskCount} tasks',
-                      theme,
-                      isDark,
-                    ),
-                    const SizedBox(width: 8),
-                    _infoPill(
-                      PhosphorIconsFill.circle,
-                      project.stage ?? 'No Stage',
-                      theme,
-                      isDark,
-                      iconColor: statusColor,
-                    ),
-                    if (project.createDate != null) ...[
-                      const Spacer(),
-                      Text(
-                        'Created ${DateFormat('MMM d, HH:mm').format(project.createDate!)}',
-                        style: GoogleFonts.poppins(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w500,
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.3),
+                          ],
                         ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              project.name,
+                              style: GoogleFonts.poppins(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: theme.colorScheme.onSurface,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              project.partnerName ?? 'Internal Project',
+                              style: GoogleFonts.poppins(
+                                fontSize: 12,
+                                color: theme.colorScheme.onSurface.withValues(
+                                  alpha: 0.5,
+                                ),
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Favorite with cleaner touch
+                      IconButton(
+                        icon: Icon(
+                          project.favorite
+                              ? PhosphorIconsFill.star
+                              : PhosphorIconsRegular.star,
+                          color: project.favorite
+                              ? AppColors.accentYellow
+                              : theme.colorScheme.onSurface.withValues(
+                                  alpha: 0.2,
+                                ),
+                        ),
+                        onPressed: onFavoriteTap,
+                        tooltip: project.favorite
+                            ? 'Remove from favorites'
+                            : 'Add to favorites',
+                        splashRadius: 20,
                       ),
                     ],
-                  ],
-                ),
-              ],
+                  ),
+                  const SizedBox(height: 12),
+                  // Stats row
+                  Row(
+                    children: [
+                      _infoPill(
+                        PhosphorIconsRegular.checkCircle,
+                        '${project.taskCount} tasks',
+                        theme,
+                      ),
+                      const SizedBox(width: 8),
+                      StatusBadge(
+                        label: project.stage ?? 'No Stage',
+                        color: statusColor,
+                        showDot: true,
+                      ),
+                      if (project.createDate != null) ...[
+                        const Spacer(),
+                        Text(
+                          'Created ${DateFormat('MMM d, HH:mm').format(project.createDate!)}',
+                          style: GoogleFonts.poppins(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w500,
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.3,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -367,17 +367,11 @@ class _ProjectListItem extends StatelessWidget {
     );
   }
 
-  Widget _infoPill(
-    IconData icon,
-    String label,
-    ThemeData theme,
-    bool isDark, {
-    Color? iconColor,
-  }) {
+  Widget _infoPill(IconData icon, String label, ThemeData theme) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.03),
+        color: theme.colorScheme.onSurface.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
@@ -385,8 +379,8 @@ class _ProjectListItem extends StatelessWidget {
         children: [
           Icon(
             icon,
-            size: icon == PhosphorIconsFill.circle ? 6 : 10,
-            color: iconColor ?? theme.colorScheme.onSurface.withValues(alpha: 0.5),
+            size: 10,
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
           ),
           const SizedBox(width: 6),
           Text(
@@ -398,23 +392,6 @@ class _ProjectListItem extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-}
-
-class _ProjectSkeleton extends StatelessWidget {
-  const _ProjectSkeleton();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      height: 110,
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardTheme.color,
-        borderRadius: BorderRadius.circular(16),
       ),
     );
   }

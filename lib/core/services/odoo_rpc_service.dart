@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'client_provider.dart';
@@ -53,13 +55,25 @@ class OdooRpcService {
           .timeout(const Duration(seconds: 10));
 
       if (resp.statusCode != 200) return [];
-      final data = jsonDecode(resp.body);
-      if (data['result'] is List) {
+      dynamic data;
+      try {
+        data = jsonDecode(resp.body);
+      } on FormatException {
+        return [];
+      }
+      if (data is Map && data['result'] is List) {
         return List<String>.from(data['result']);
       }
       return [];
+    } on SocketException {
+      return [];
+    } on TimeoutException {
+      return [];
+    } on FormatException {
+      return [];
     } catch (e) {
-      throw Exception('DB Fetch error: $e');
+      debugPrint('DB Fetch error: $e');
+      return [];
     }
   }
 
@@ -77,38 +91,62 @@ class OdooRpcService {
     if (url.endsWith('/odoo')) url = url.substring(0, url.length - 5);
 
     try {
-      final client = OdooClient(url, httpClient: _httpClient);
-      OdooSession? odooSession;
-
+      final client = OdooClient(url);
       try {
-        odooSession = await client.authenticate(database, username, password);
-      } catch (e) {
-        // Fallback: manual auth via JSON-RPC
-        final resp = await _httpClient.post(
-          Uri.parse('$url/web/session/authenticate'),
-          headers: {
-            'Content-Type': 'application/json',
-            'User-Agent': _ua,
-          },
-          body: jsonEncode({
-            'jsonrpc': '2.0',
-            'method': 'call',
-            'params': {
-              'db': database,
-              'login': username,
-              'password': password,
-            },
-            'id': DateTime.now().millisecondsSinceEpoch,
-          }),
-        );
+        OdooSession? odooSession;
+
+        try {
+          odooSession = await client.authenticate(database, username, password);
+        } catch (e) {
+          // Fallback: manual auth via JSON-RPC
+          final resp = await _httpClient
+              .post(
+                Uri.parse('$url/web/session/authenticate'),
+                headers: {
+                  'Content-Type': 'application/json',
+                  'User-Agent': _ua,
+                },
+                body: jsonEncode({
+                  'jsonrpc': '2.0',
+                  'method': 'call',
+                  'params': {
+                    'db': database,
+                    'login': username,
+                    'password': password,
+                  },
+                  'id': DateTime.now().millisecondsSinceEpoch,
+                }),
+              )
+              .timeout(const Duration(seconds: 10));
 
         if (resp.statusCode != 200) {
           throw Exception('Auth failed: HTTP ${resp.statusCode}');
         }
 
-        final body = jsonDecode(resp.body);
-        if (body['error'] != null) {
-          throw Exception(body['error']['message'] ?? 'Authentication failed');
+        final dynamic body;
+        try {
+          body = jsonDecode(resp.body);
+        } on FormatException {
+          throw Exception('Auth failed: invalid server response');
+        }
+        if (body is! Map || body['error'] != null) {
+          final error = body is Map ? body['error'] : null;
+          // "data.name" carries the real Python exception (e.g.
+          // odoo.exceptions.AccessDenied vs builtins.AttributeError)
+          // behind generic top-level messages like "Cyllo Server Error".
+          final dataName = error?['data']?['name']?.toString() ?? '';
+          final dataMessage =
+              error?['data']?['message']?.toString() ?? dataName;
+          if (dataName.contains('AccessDenied') ||
+              dataMessage.toLowerCase().contains('access denied')) {
+            throw Exception('Invalid credentials');
+          }
+          // Server processed the auth but its own code crashed while
+          // building the session (custom-module fault).
+          final serverMsg = dataMessage.isNotEmpty
+              ? dataMessage.split('\n').first
+              : error?['message']?.toString() ?? 'unknown server error';
+          throw Exception('ServerFault: $serverMsg');
         }
 
         final result = body['result'];
@@ -160,6 +198,9 @@ class OdooRpcService {
 
       setSession(sessionModel);
       return sessionModel;
+      } finally {
+        client.close();
+      }
     } catch (e) {
       rethrow;
     }
@@ -187,37 +228,89 @@ class OdooRpcService {
       },
     };
 
-    final resp = await _httpClient
-        .post(
-          Uri.parse('${_session!.serverUrl}/web/dataset/call_kw'),
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'X-Requested-With': 'XMLHttpRequest',
-            'User-Agent': _ua,
-            'Cookie': 'session_id=${_session!.sessionId}',
-          },
-          body: jsonEncode(payload),
-        )
-        .timeout(const Duration(seconds: 30));
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'X-Requested-With': 'XMLHttpRequest',
+      'User-Agent': _ua,
+      // Browsers manage cookies themselves and forbid setting the
+      // Cookie header manually; only send it on non-web platforms.
+      if (!kIsWeb) 'Cookie': 'session_id=${_session!.sessionId}',
+    };
 
+    late http.Response resp;
+    try {
+      resp = await _httpClient
+          .post(
+            Uri.parse('${_session!.serverUrl}/web/dataset/call_kw'),
+            headers: headers,
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 30));
+    } on SocketException catch (e) {
+      throw Exception('Network error: ${e.message}');
+    } on TimeoutException {
+      throw Exception('Request timed out');
+    }
+
+    if (resp.statusCode == 401) {
+      onSessionExpired?.call();
+      throw Exception('Session expired (HTTP 401)');
+    }
     if (resp.statusCode != 200) {
       throw Exception('RPC HTTP error: ${resp.statusCode}');
     }
 
-    final data = jsonDecode(resp.body);
+    dynamic data;
+    try {
+      data = jsonDecode(resp.body);
+    } on FormatException {
+      throw Exception('RPC error: invalid server response');
+    }
+    if (data is! Map) {
+      throw Exception('RPC error: invalid server response');
+    }
     if (data['error'] != null) {
       final err = data['error'];
-      final msg = err['data']?['message'] ?? err['message'] ?? 'RPC Error';
-      
-      if (msg.toLowerCase().contains('session expired') || 
-          msg.toLowerCase().contains('session has expired')) {
+      String msg = 'RPC Error';
+      int? code;
+      int? faultCode;
+      if (err is Map) {
+        final errData = err['data'];
+        if (errData is Map && errData['message'] != null) {
+          msg = errData['message'].toString();
+        } else if (err['message'] != null) {
+          msg = err['message'].toString();
+        }
+        if (err['code'] is int) code = err['code'] as int;
+        if (errData is Map && errData['fault_code'] is int) {
+          faultCode = errData['fault_code'] as int;
+        }
+      } else {
+        msg = err.toString();
+      }
+
+      if (_looksLikeSessionExpiry(msg) || code == 100 || faultCode == 100) {
         onSessionExpired?.call();
       }
-      
+
       throw Exception(msg);
     }
     return data['result'];
+  }
+
+  /// Returns true when an RPC error message/code smells like an expired or
+  /// otherwise invalid server-side session.
+  static bool _looksLikeSessionExpiry(String message) {
+    final m = message.toLowerCase();
+    return m.contains('session expired') ||
+        m.contains('session has expired') ||
+        m.contains('invalid session') ||
+        m.contains('session invalid') ||
+        m.contains('session missing') ||
+        m.contains('missing session') ||
+        m.contains('no session') ||
+        m.contains('not authenticated');
   }
 
   // ─── default_get helper ───────────────────────────────────────────────────
@@ -299,7 +392,12 @@ class OdooRpcService {
     // Auto-retry loop to handle field-level access rights errors.
     // Sometimes fields_get says a field exists, but search_read fails because
     // the current user doesn't belong to the required security group.
-    while (true) {
+    // The retry count is capped so a pathological server can never trap us
+    // in an infinite loop (each retry removes at least one field, but the
+    // server may keep reporting new ones).
+    const maxRetries = 10;
+    var attempts = 0;
+    while (attempts <= maxRetries) {
       try {
         return await searchRead(
           model: model,
@@ -317,18 +415,24 @@ class OdooRpcService {
         // We look for any "field '...'" or 'field "..."' pattern.
         final match = RegExp(r'''field ["']([^"']+)["']''', caseSensitive: false).firstMatch(errStr);
         
-        if (match != null && match.groupCount >= 1) {
+        if (attempts < maxRetries &&
+            match != null &&
+            match.groupCount >= 1) {
           final badField = match.group(1)!;
           if (resolvedFields.contains(badField)) {
             debugPrint('Access denied or invalid field: $badField. Retrying without it.');
             resolvedFields.remove(badField);
             if (resolvedFields.isEmpty) resolvedFields = ['id'];
+            attempts++;
             continue; // Retry without the bad field
           }
         }
         rethrow;
       }
     }
+    // Unreachable: the loop above either returns or rethrows, but the
+    // analyzer can't prove it once the retry count is capped.
+    throw Exception('Field retry limit exceeded for $model');
   }
 
   // ─── search_count helper ───────────────────────────────────────────────────
@@ -444,16 +548,43 @@ class OdooRpcService {
 
   static Future<Map<String, dynamic>> getSessionInfo() async {
     if (_session == null) throw Exception('Not authenticated');
-    final resp = await _httpClient.post(
-      Uri.parse('${_session!.serverUrl}/web/session/get_session_info'),
-      headers: {
-        'Content-Type': 'application/json',
-        'Cookie': 'session_id=${_session!.sessionId}',
-      },
-      body: jsonEncode({'jsonrpc': '2.0', 'method': 'call', 'params': {}}),
-    );
-    final data = jsonDecode(resp.body);
-    return Map<String, dynamic>.from(data['result'] ?? {});
+    late http.Response resp;
+    try {
+      resp = await _httpClient
+          .post(
+            Uri.parse('${_session!.serverUrl}/web/session/get_session_info'),
+            headers: {
+              'Content-Type': 'application/json',
+              // Browsers forbid setting the Cookie header manually.
+              if (!kIsWeb) 'Cookie': 'session_id=${_session!.sessionId}',
+            },
+            body: jsonEncode({'jsonrpc': '2.0', 'method': 'call', 'params': {}}),
+          )
+          .timeout(const Duration(seconds: 10));
+    } on SocketException catch (e) {
+      throw Exception('Network error: ${e.message}');
+    } on TimeoutException {
+      throw Exception('Request timed out');
+    }
+    if (resp.statusCode == 401) {
+      onSessionExpired?.call();
+      throw Exception('Session expired (HTTP 401)');
+    }
+    if (resp.statusCode != 200) {
+      throw Exception('Session info HTTP error: ${resp.statusCode}');
+    }
+    dynamic data;
+    try {
+      data = jsonDecode(resp.body);
+    } on FormatException {
+      throw Exception('Session info error: invalid server response');
+    }
+    if (data is! Map) {
+      throw Exception('Session info error: invalid server response');
+    }
+    final result = data['result'];
+    if (result is Map) return Map<String, dynamic>.from(result);
+    return {};
   }
 
   // ─── Field candidate lists (registry will prune invalid ones) ─────────────

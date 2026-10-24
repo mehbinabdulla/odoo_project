@@ -15,6 +15,7 @@ import 'project_form_screen.dart';
 import '../../core/services/odoo_field_registry.dart';
 import '../../core/services/odoo_rpc_service.dart';
 import '../../core/utils/route_observer.dart';
+import '../../core/widgets/odoo_detail_sections.dart';
 
 
 class ProjectDetailScreen extends StatefulWidget {
@@ -139,10 +140,10 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
     if (reset) {
       _listOffset = 0;
       _listHasMore = true;
-      if (showLoading) setState(() => _isLoading = true);
+      if (showLoading && mounted) setState(() => _isLoading = true);
     } else {
       if (!_listHasMore || _isListLoadingMore) return;
-      setState(() => _isListLoadingMore = true);
+      if (mounted) setState(() => _isListLoadingMore = true);
     }
 
     try {
@@ -155,6 +156,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
         filterState: _taskFilter,
       );
 
+      if (!mounted) return;
       setState(() {
         if (reset) {
           _listTasks = newTasks;
@@ -192,7 +194,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
       if (!state.hasMore || state.isLoadingMore) return;
     }
 
-    setState(() => state.isLoadingMore = true);
+    if (mounted) setState(() => state.isLoadingMore = true);
 
     try {
       final provider = context.read<ProjectProvider>();
@@ -205,6 +207,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
         filterState: _taskFilter,
       );
 
+      if (!mounted) return;
       setState(() {
         if (reset) {
           state.tasks = newTasks;
@@ -261,9 +264,11 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
               ),
             ),
             icon: const Icon(PhosphorIconsBold.pencilSimple, size: 20),
+            tooltip: 'Edit Project',
           ),
           PopupMenuButton<String>(
             icon: const Icon(PhosphorIconsBold.dotsThreeVertical, size: 20),
+            tooltip: 'More options',
             onSelected: (val) {
               if (val == 'details') {
                 _showProjectDetailsPopup();
@@ -362,11 +367,12 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
       children: [
-        _detailItem(
-          'Customer',
-          widget.project.partnerName ?? 'N/A',
-          PhosphorIconsRegular.user,
-        ),
+        if (widget.project.partnerName?.isNotEmpty == true)
+          _detailItem(
+            'Customer',
+            widget.project.partnerName!,
+            PhosphorIconsRegular.user,
+          ),
         if (widget.project.userLogin != null)
           _detailItem(
             'Project Manager',
@@ -424,6 +430,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
   }
 
   Widget _detailItem(String label, String value, IconData icon) {
+    final labelColor =
+        Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5);
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Row(
@@ -437,7 +445,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
               children: [
                 Text(
                   label,
-                  style: GoogleFonts.poppins(fontSize: 10, color: Colors.grey),
+                  style: GoogleFonts.poppins(fontSize: 10, color: labelColor),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -591,28 +599,27 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
   void _showProjectDetailsPopup() {
     final theme = Theme.of(context);
 
-    // Filter fields: not null/false/empty AND not readonly
-    final displayFields = _fieldDefs.keys.where((k) {
+    // Filter fields: not null/false/empty; skip technical extras that
+    // aren't useful in a "Details" list.
+    final valuedFields = _fieldDefs.keys.where((k) {
       final val = _fieldValues[k];
-      final _ = _fieldDefs[k];
 
       if (val == null || val == false || val == '') return false;
       if (val is List && val.isEmpty) return false;
 
-      // Skip common technical fields that aren't useful in a "Details" list
       if (k == 'id' || k == 'message_main_attachment_id' || k == 'active') {
         return false;
       }
 
       return true;
-    }).toList();
+    }).toSet();
 
-    // Sort by label
-    displayFields.sort((a, b) {
-      final aLabel = _fieldDefs[a]['string'] ?? a;
-      final bLabel = _fieldDefs[b]['string'] ?? b;
-      return aLabel.toString().compareTo(bLabel.toString());
-    });
+    // Sort by label via the shared detail helper.
+    final displayFields = OdooDetailSections.orderedDetailFields(
+      visible: valuedFields,
+      fieldDefs: _fieldDefs,
+      defaultFields: const {},
+    );
 
     showModalBottomSheet(
       context: context,
@@ -675,28 +682,10 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
                         final key = displayFields[i];
                         final def = _fieldDefs[key];
                         final label = def['string'] ?? key;
-                        final type = def['type'];
                         final val = _fieldValues[key];
 
-                        String displayVal = val.toString();
-                        if (type == 'many2one' &&
-                            val is List &&
-                            val.length == 2) {
-                          displayVal = val[1].toString();
-                        } else if ((type == 'many2many' ||
-                                type == 'one2many') &&
-                            val is List) {
-                          displayVal = '${val.length} items';
-                        } else if (type == 'selection') {
-                          final selection = def['selection'] as List?;
-                          if (selection != null) {
-                            final match = selection.firstWhere(
-                              (e) => e[0] == val,
-                              orElse: () => [val, val.toString()],
-                            );
-                            displayVal = match[1];
-                          }
-                        }
+                        final displayVal =
+                            OdooDetailSections.detailDisplayValue(def, val);
 
                         return Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -888,6 +877,7 @@ class _KanbanColumn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Container(
       width: 260,
       margin: const EdgeInsets.only(right: 12),
@@ -921,11 +911,11 @@ class _KanbanColumn extends StatelessWidget {
                     vertical: 2,
                   ),
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.5),
+                    color: theme.colorScheme.surface.withValues(alpha: 0.5),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
-                    state.tasks.length.toString() + (state.hasMore ? '+' : ''),
+                    '${state.tasks.length}${state.hasMore ? '+' : ''}',
                     style: GoogleFonts.poppins(
                       fontSize: 10,
                       fontWeight: FontWeight.w700,

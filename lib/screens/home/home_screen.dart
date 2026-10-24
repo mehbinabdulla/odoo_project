@@ -29,6 +29,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with RouteAwareRefetchMixin {
   int _currentIndex = 0;
   bool _moduleMissingDialogShown = false;
+  late final List<Widget> _screens;
 
   final _tabs = [
     _TabItem(
@@ -56,6 +57,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAwareRefetchMixin {
   @override
   void initState() {
     super.initState();
+    _screens = [
+      DashboardScreen(onNavigate: _navigateTo),
+      const ProjectsScreen(),
+      const TasksScreen(),
+      const TimesheetsScreen(),
+    ];
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadInitialData());
   }
 
@@ -70,7 +77,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAwareRefetchMixin {
     ]);
 
     // Auto-retry on network/connectivity errors (e.g. DNS not ready at startup)
-    final isNetworkError = _isConnectivityError(projectProvider.error) ||
+    final isNetworkError =
+        _isConnectivityError(projectProvider.error) ||
         _isConnectivityError(timesheetProvider.error) ||
         _isConnectivityError(taskProvider.error);
 
@@ -93,7 +101,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAwareRefetchMixin {
   void _navigateTo(int index) {
     if (_currentIndex == index) return;
     setState(() => _currentIndex = index);
-    
+
     // Refetch data when switching tabs
     if (!mounted) return;
     switch (index) {
@@ -132,21 +140,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAwareRefetchMixin {
     }
   }
 
-  List<Widget> get _screens => [
-    DashboardScreen(onNavigate: _navigateTo),
-    const ProjectsScreen(),
-    const TasksScreen(),
-    const TimesheetsScreen(),
-  ];
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final session = context.watch<SessionProvider>().session;
+    final session = context.select((SessionProvider p) => p.session);
 
-    final projectProvider = context.watch<ProjectProvider>();
-    if (projectProvider.isModuleMissing && !_moduleMissingDialogShown) {
+    final isModuleMissing = context.select(
+      (ProjectProvider p) => p.isModuleMissing,
+    );
+    if (isModuleMissing && !_moduleMissingDialogShown) {
       _moduleMissingDialogShown = true;
       final ctx = context; // capture before async boundary
       Future.microtask(() {
@@ -188,7 +190,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAwareRefetchMixin {
 
     return Scaffold(
       extendBody: false,
-      floatingActionButton: _buildFAB(context),
+      floatingActionButton: Consumer2<ProjectProvider, TimesheetProvider>(
+        builder: (context, projectProvider, timesheetProvider, _) =>
+            _buildFAB(context, projectProvider, timesheetProvider) ??
+            const SizedBox.shrink(),
+      ),
       appBar: AppBar(
         // leading: _buildLogo(),
         title: Text(
@@ -213,74 +219,96 @@ class _HomeScreenState extends State<HomeScreen> with RouteAwareRefetchMixin {
           // User avatar / logout
           Padding(
             padding: const EdgeInsets.only(right: 16, left: 8),
-            child: GestureDetector(
-              onTap: () => _showUserMenu(context),
-              child: Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                  color: isDark ? AppColors.darkCard : AppColors.lightCard,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: (session != null && session.userId != null)
-                    ? OdooNetworkImage(
-                        url: '${session.serverUrl}/web/image?model=res.users&field=image_128&id=${session.userId}',
-                        headers: {
-                          'Cookie': 'session_id=${session.sessionId}',
-                        },
-                        width: 32,
-                        height: 32,
-                        fit: BoxFit.cover,
+            child: Semantics(
+              button: true,
+              label: 'Account menu',
+              child: InkWell(
+                onTap: () => _showUserMenu(context),
+                borderRadius: BorderRadius.circular(8),
+                child: Tooltip(
+                  message: 'Account menu',
+                  child: Container(
+                    width: 48,
+                    height: 48,
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).cardTheme.color,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).cardTheme.color,
                         borderRadius: BorderRadius.circular(8),
-                        errorBuilder: (context, error, stackTrace) {
-                          return Container(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: AppColors.gradientPurple,
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              ),
+                      ),
+                      child: (session != null && session.userId != null)
+                          ? OdooNetworkImage(
+                              url:
+                                  '${session.serverUrl}/web/image?model=res.users&field=image_128&id=${session.userId}',
+                              headers: {
+                                'Cookie': 'session_id=${session.sessionId}',
+                              },
+                              width: 32,
+                              height: 32,
+                              fit: BoxFit.cover,
                               borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Center(
-                              child: Text(
-                                (session.userName ?? session.userLogin).isEmpty
-                                    ? 'U'
-                                    : (session.userName ?? session.userLogin)
-                                          .substring(0, 1)
-                                          .toUpperCase(),
-                                style: GoogleFonts.poppins(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w700,
-                                  color: Colors.white,
+                              errorBuilder: (context, error, stackTrace) {
+                                return Container(
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      colors: AppColors.gradientPurple,
+                                      begin: Alignment.topLeft,
+                                      end: Alignment.bottomRight,
+                                    ),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Center(
+                                    child: Text(
+                                      (session.userName ?? session.userLogin)
+                                              .isEmpty
+                                          ? 'U'
+                                          : (session.userName ??
+                                                    session.userLogin)
+                                                .substring(0, 1)
+                                                .toUpperCase(),
+                                      style: GoogleFonts.poppins(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            )
+                          : Container(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: AppColors.gradientPurple,
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                ),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Center(
+                                child: Text(
+                                  (session?.userName ??
+                                          session?.userLogin ??
+                                          'U')
+                                      .substring(0, 1)
+                                      .toUpperCase(),
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                  ),
                                 ),
                               ),
                             ),
-                          );
-                        },
-                      )
-                    : Container(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: AppColors.gradientPurple,
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Center(
-                          child: Text(
-                            (session?.userName ?? session?.userLogin ?? 'U')
-                                .substring(0, 1)
-                                .toUpperCase(),
-                            style: GoogleFonts.poppins(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
@@ -304,47 +332,55 @@ class _HomeScreenState extends State<HomeScreen> with RouteAwareRefetchMixin {
                 final isSelected = _currentIndex == index;
                 final tab = _tabs[index];
                 return Expanded(
-                  child: GestureDetector(
-                    onTap: () => _navigateTo(index),
-                    behavior: HitTestBehavior.opaque,
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: isSelected
-                                ? AppColors.primary.withValues(alpha: 0.1)
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Icon(
-                            isSelected ? tab.activeIcon : tab.icon,
-                            color: isSelected
-                                ? AppColors.primary
-                                : theme.colorScheme.onSurface.withValues(
-                                    alpha: 0.4,
-                                  ),
-                            size: 26,
-                          ),
+                  child: Semantics(
+                    button: true,
+                    selected: isSelected,
+                    label: tab.label,
+                    child: InkWell(
+                      onTap: () => _navigateTo(index),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Tooltip(
+                        message: tab.label,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? AppColors.primary.withValues(alpha: 0.1)
+                                    : Colors.transparent,
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Icon(
+                                isSelected ? tab.activeIcon : tab.icon,
+                                color: isSelected
+                                    ? AppColors.primary
+                                    : theme.colorScheme.onSurface.withValues(
+                                        alpha: 0.4,
+                                      ),
+                                size: 26,
+                              ),
+                            ),
+                            Text(
+                              tab.label,
+                              style: GoogleFonts.poppins(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                                color: isSelected
+                                    ? AppColors.primary
+                                    : theme.colorScheme.onSurface.withValues(
+                                        alpha: 0.4,
+                                      ),
+                              ),
+                            ),
+                          ],
                         ),
-                        Text(
-                          tab.label,
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                            color: isSelected
-                                ? AppColors.primary
-                                : theme.colorScheme.onSurface.withValues(
-                                    alpha: 0.4,
-                                  ),
-                          ),
-                        ),
-                      ],
+                      ),
                     ),
                   ),
                 );
@@ -368,13 +404,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAwareRefetchMixin {
     );
   }
 
-  Widget? _buildFAB(BuildContext context) {
+  Widget? _buildFAB(
+    BuildContext context,
+    ProjectProvider projectProvider,
+    TimesheetProvider timesheetProvider,
+  ) {
     String label = '';
     IconData icon = PhosphorIconsBold.plus;
     VoidCallback? onTap;
-
-    final projectProvider = context.read<ProjectProvider>();
-    final timesheetProvider = context.read<TimesheetProvider>();
 
     switch (_currentIndex) {
       case 0: // Dashboard
@@ -429,8 +466,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAwareRefetchMixin {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
     );
   }
-
-
 }
 
 class _UserMenuSheet extends StatelessWidget {
@@ -442,7 +477,6 @@ class _UserMenuSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final sessionProvider = context.read<SessionProvider>();
-    final isDark = theme.brightness == Brightness.dark;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -453,7 +487,7 @@ class _UserMenuSheet extends StatelessWidget {
           width: 40,
           height: 4,
           decoration: BoxDecoration(
-            color: Colors.grey[500],
+            color: theme.dividerColor,
             borderRadius: BorderRadius.circular(2),
           ),
         ),
@@ -463,12 +497,13 @@ class _UserMenuSheet extends StatelessWidget {
           width: 64,
           height: 64,
           decoration: BoxDecoration(
-            color: isDark ? AppColors.darkCard : AppColors.lightCard,
+            color: theme.cardTheme.color,
             borderRadius: BorderRadius.circular(20),
           ),
           child: session?.userId != null && session?.serverUrl != null
               ? OdooNetworkImage(
-                  url: '${session!.serverUrl}/web/image?model=res.users&field=image_128&id=${session.userId}',
+                  url:
+                      '${session!.serverUrl}/web/image?model=res.users&field=image_128&id=${session.userId}',
                   headers: {'Cookie': 'session_id=${session.sessionId}'},
                   width: 64,
                   height: 64,
@@ -523,7 +558,12 @@ class _UserMenuSheet extends StatelessWidget {
                 ),
         ),
         const SizedBox(height: 12),
-        Text(session?.userName ?? 'User', style: theme.textTheme.titleMedium, maxLines: 1, overflow: TextOverflow.ellipsis),
+        Text(
+          session?.userName ?? 'User',
+          style: theme.textTheme.titleMedium,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
         const SizedBox(height: 4),
         Text(
           session?.userLogin ?? '',
@@ -543,10 +583,7 @@ class _UserMenuSheet extends StatelessWidget {
           ),
           child: Text(
             session?.serverUrl ?? '',
-            style: GoogleFonts.poppins(
-              fontSize: 12,
-              color: AppColors.primary,
-            ),
+            style: GoogleFonts.poppins(fontSize: 12, color: AppColors.primary),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),

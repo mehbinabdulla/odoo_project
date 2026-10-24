@@ -9,6 +9,7 @@ import '../../core/services/odoo_rpc_service.dart';
 import '../../core/services/biometric_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../home/home_screen.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -26,6 +27,12 @@ class _LoginScreenState extends State<LoginScreen>
   final _passwordController = TextEditingController();
 
   String _selectedProtocol = 'https://';
+  static const _secureStorage = FlutterSecureStorage();
+  // Saved-credential keys: non-secrets in prefs, secrets in secure storage.
+  static const _savedServerKey = 'saved_server';
+  static const _savedDbKey = 'saved_db';
+  static const _savedLoginKey = 'saved_login';
+  static const _savedPasswordKey = 'saved_password';
   List<String> _databases = [];
   String? _selectedDatabase;
   bool _urlChecked = false;
@@ -36,11 +43,20 @@ class _LoginScreenState extends State<LoginScreen>
   bool _canCheckBiometric = false;
   bool _isBiometricAuthAvailable = false;
   Timer? _debounce;
+  // Last URL whose databases were already fetched (skips redundant auto checks).
+  String? _checkedUrl;
 
   late AnimationController _slideController;
   late AnimationController _fadeController;
   late Animation<Offset> _slideAnimation;
   late Animation<double> _fadeAnimation;
+
+  // Safety net: ignore late async completions that fire after dispose.
+  @override
+  void setState(VoidCallback fn) {
+    if (!mounted) return;
+    super.setState(fn);
+  }
 
   @override
   void initState() {
@@ -67,9 +83,14 @@ class _LoginScreenState extends State<LoginScreen>
   Future<void> _checkBiometrics() async {
     final canCheck = await BiometricService.canCheckBiometrics();
     final isSupported = await BiometricService.isDeviceSupported();
+    final savedLogin = await _secureStorage.read(key: _savedLoginKey);
+    // Fall back to legacy plain-text prefs copy (pre-migration).
     final prefs = await SharedPreferences.getInstance();
-    final hasSavedCreds = prefs.getString('saved_login') != null;
+    if (!mounted) return;
+    final hasSavedCreds =
+        savedLogin != null || prefs.getString(_savedLoginKey) != null;
 
+    if (!mounted) return;
     setState(() {
       _canCheckBiometric = canCheck && isSupported;
       _isBiometricAuthAvailable = _canCheckBiometric && hasSavedCreds;
@@ -87,13 +108,16 @@ class _LoginScreenState extends State<LoginScreen>
     );
 
     if (authenticated) {
+      if (!mounted) return;
       setState(() => _isLoggingIn = true);
       try {
         final prefs = await SharedPreferences.getInstance();
-        final server = prefs.getString('saved_server');
-        final db = prefs.getString('saved_db');
-        final login = prefs.getString('saved_login');
-        final pass = prefs.getString('saved_password');
+        final server = prefs.getString(_savedServerKey);
+        final db = prefs.getString(_savedDbKey);
+        final login = await _secureStorage.read(key: _savedLoginKey) ??
+            prefs.getString(_savedLoginKey);
+        final pass = await _secureStorage.read(key: _savedPasswordKey) ??
+            prefs.getString(_savedPasswordKey);
 
         if (server != null && db != null && login != null && pass != null) {
           if (!mounted) return;
@@ -112,17 +136,19 @@ class _LoginScreenState extends State<LoginScreen>
             );
           }
         } else {
-          _showErrorToast('No saved credentials found.');
+          _showErrorToast('No saved sign-in',
+              'Sign in once with your password first to enable fingerprint login.');
         }
       } catch (e) {
-        _showErrorToast(e.toString().replaceFirst('Exception: ', ''));
+        final (title, msg) = _friendlyLoginError(e);
+        _showErrorToast(title, msg);
       } finally {
         if (mounted) setState(() => _isLoggingIn = false);
       }
     }
   }
 
-  void _showErrorToast(String message) {
+  void _showErrorToast(String title, String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).removeCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
@@ -148,7 +174,7 @@ class _LoginScreenState extends State<LoginScreen>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Action Required',
+                    title,
                     style: GoogleFonts.poppins(
                       fontSize: 14,
                       fontWeight: FontWeight.w700,
@@ -180,12 +206,110 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
+  void _showWarningToast(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          message,
+          style: GoogleFonts.poppins(fontSize: 13, color: Colors.white),
+        ),
+        backgroundColor: Colors.orange.shade800,
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.all(16),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        elevation: 8,
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  }
+
+  /// Maps raw exceptions from the sign-in flow to a friendly
+  /// (title, message) pair for the error toast.
+  (String, String) _friendlyLoginError(Object e) {
+    final message = e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
+    final text = message.toLowerCase();
+    final server = _fullUrl.isEmpty ? 'the server' : _fullUrl;
+
+    if (text.contains('invalid credentials') ||
+        text.contains('access denied') ||
+        text.contains('authentication failed')) {
+      return (
+        'Sign-in failed',
+        'Incorrect username or password for this database. '
+            'Double-check your details and try again.',
+      );
+    }
+    if (text.contains('socketexception') ||
+        text.contains('connection refused') ||
+        text.contains('failed host lookup') ||
+        text.contains('network error') ||
+        text.contains('network is unreachable')) {
+      return (
+        'Server unreachable',
+        "Couldn't connect to $server. Check the server address and "
+            'your internet connection.',
+      );
+    }
+    if (text.contains('timed out') || text.contains('timeoutexception')) {
+      return (
+        'Connection timed out',
+        'The server took too long to respond. Try again in a moment.',
+      );
+    }
+    // e.g. "Auth failed: HTTP 502"
+    final httpCode =
+        RegExp(r'HTTP (\d+)').firstMatch(message.toUpperCase())?.group(1);
+    if (httpCode != null) {
+      return (
+        'Server error (HTTP $httpCode)',
+        'The server is having trouble right now. Please try again shortly.',
+      );
+    }
+    if (text.contains('invalid server response') ||
+        text.contains('formatexception') ||
+        text.contains('unexpected response') ||
+        text.contains('invalid server response')) {
+      return (
+        'Unexpected server response',
+        "The server sent data we couldn't read. Confirm this is a "
+            'compatible Odoo server.',
+      );
+    }
+    if (text.contains('two factor') || text.contains('2fa')) {
+      return (
+        'Two-factor required',
+        'This account needs a security code to sign in. '
+            'Ask your administrator for help.',
+      );
+    }
+    if (text.contains('serverfault:')) {
+      final detail = message.replaceFirst(RegExp(r'^.*?ServerFault:\s*'), '');
+      return (
+        'Server error',
+        'The server crashed while completing your sign-in — this is a '
+            'server-side issue, not your credentials. Contact the server '
+            'administrator. (Server said: "$detail")',
+      );
+    }
+    // Terse server faults (e.g. "Cyllo Server Error") give away no details.
+    return (
+      'Sign-in failed',
+      'The server rejected the sign-in without details ("$message"). '
+          'Verify the database name and that this account is active.',
+    );
+  }
+
   void _onUrlChanged() {
     if (_debounce?.isActive ?? false) _debounce!.cancel();
     _debounce = Timer(const Duration(milliseconds: 500), () {
+      if (!mounted) return;
       if (_urlController.text.trim().isNotEmpty) {
-        _checkServer();
+        _checkServer(silent: true);
       } else {
+        if (!mounted) return;
+        _checkedUrl = null;
         setState(() {
           _databases = [];
           _urlChecked = false;
@@ -197,6 +321,7 @@ class _LoginScreenState extends State<LoginScreen>
   @override
   void dispose() {
     _debounce?.cancel();
+    _debounce = null;
     _slideController.dispose();
     _fadeController.dispose();
     _urlController.dispose();
@@ -211,11 +336,17 @@ class _LoginScreenState extends State<LoginScreen>
     return '$_selectedProtocol$url';
   }
 
-  Future<void> _checkServer() async {
+  Future<void> _checkServer({bool silent = false}) async {
+    if (!mounted) return;
     if (_urlController.text.trim().isEmpty) {
-      _showErrorToast('Please enter a server URL.');
+      _showErrorToast('Server URL required',
+          'Enter your Odoo server address first.');
       return;
     }
+
+    // Auto checks fired while typing stay quiet and skip repeats of
+    // an already-checked URL; explicit checks always run.
+    if (silent && _checkedUrl == _fullUrl) return;
 
     setState(() {
       _isLoadingDatabases = true;
@@ -225,8 +356,12 @@ class _LoginScreenState extends State<LoginScreen>
 
     try {
       final dbs = await OdooRpcService.listDatabases(_fullUrl);
+      if (!mounted) return;
       if (dbs.isEmpty) {
-        _showErrorToast('No databases found. Enter database manually.');
+        if (!silent) {
+          _showErrorToast('No databases found',
+              "The server didn't list any databases. Enter the database name manually.");
+        }
         setState(() {
           _urlChecked = true;
         });
@@ -238,16 +373,24 @@ class _LoginScreenState extends State<LoginScreen>
         });
       }
     } catch (e) {
-      _showErrorToast(e.toString().replaceFirst('Exception: ', ''));
+      // Explicit checks surface friendly errors; typing-triggered
+      // auto checks stay quiet to avoid toast spam.
+      if (!silent) {
+        final (title, msg) = _friendlyLoginError(e);
+        _showErrorToast(title, msg);
+      }
     } finally {
-      setState(() => _isLoadingDatabases = false);
+      _checkedUrl = _fullUrl;
+      if (mounted) setState(() => _isLoadingDatabases = false);
     }
   }
 
   Future<void> _login() async {
+    if (!mounted) return;
     if (!_formKey.currentState!.validate()) return;
     if (_selectedDatabase == null || _selectedDatabase!.isEmpty) {
-      _showErrorToast('Please select or enter a database.');
+      _showErrorToast('Database required',
+          'Choose or enter a database before signing in.');
       return;
     }
 
@@ -266,10 +409,19 @@ class _LoginScreenState extends State<LoginScreen>
 
       if (mounted && provider.isLoggedIn) {
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('saved_server', _fullUrl);
-        await prefs.setString('saved_db', _selectedDatabase!);
-        await prefs.setString('saved_login', _loginController.text.trim());
-        await prefs.setString('saved_password', _passwordController.text);
+        await prefs.setString(_savedServerKey, _fullUrl);
+        await prefs.setString(_savedDbKey, _selectedDatabase!);
+        // Secrets go to encrypted secure storage; clear legacy prefs copies.
+        await _secureStorage.write(
+          key: _savedLoginKey,
+          value: _loginController.text.trim(),
+        );
+        await _secureStorage.write(
+          key: _savedPasswordKey,
+          value: _passwordController.text,
+        );
+        await prefs.remove(_savedLoginKey);
+        await prefs.remove(_savedPasswordKey);
         if (!mounted) return;
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(builder: (_) => const HomeScreen()),
@@ -277,7 +429,8 @@ class _LoginScreenState extends State<LoginScreen>
         );
       }
     } catch (e) {
-      _showErrorToast(e.toString().replaceFirst('Exception: ', ''));
+      final (title, msg) = _friendlyLoginError(e);
+      _showErrorToast(title, msg);
     } finally {
       if (mounted) setState(() => _isLoggingIn = false);
     }
@@ -509,6 +662,11 @@ class _LoginScreenState extends State<LoginScreen>
                           padding: EdgeInsets.zero,
                           onChanged: (v) {
                             setState(() => _selectedProtocol = v!);
+                            if (v == 'http://') {
+                              _showWarningToast(
+                                'HTTP sends credentials unencrypted. Use only for local/dev servers.',
+                              );
+                            }
                             if (_urlController.text.trim().isNotEmpty) {
                               _checkServer();
                             }
@@ -708,7 +866,8 @@ class _LoginScreenState extends State<LoginScreen>
                         onPressed: () {
                           if (_selectedDatabase == null ||
                               _selectedDatabase!.isEmpty) {
-                            _showErrorToast('Please select or enter a database.');
+                            _showErrorToast('Database required',
+                                'Choose or enter a database before signing in.');
                           } else {
                             setState(() {
                               _currentStep = 1;
@@ -826,7 +985,7 @@ class _LoginScreenState extends State<LoginScreen>
   Widget _buildFooter(ThemeData theme) {
     return Center(
       child: Text(
-        'Compatible with Odoo 15 · 16 · 17 · 18 · 19',
+        'Compatible with Odoo 15 · 16 · 17 · 18 · 19 · 20',
         style: GoogleFonts.poppins(
           fontSize: 12,
           color: theme.colorScheme.onSurface.withValues(alpha: 0.4),

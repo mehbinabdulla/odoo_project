@@ -1,4 +1,4 @@
-import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -7,7 +7,14 @@ class BiometricService {
   static const _biometricEnabledKey = 'biometric_enabled';
 
   static Future<bool> isDeviceSupported() async {
-    return await _auth.isDeviceSupported();
+    // local_auth has no web implementation; the channel call throws
+    // MissingPluginException on web, so short-circuit here.
+    if (kIsWeb) return false;
+    try {
+      return await _auth.isDeviceSupported();
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<bool> canCheckBiometrics() async {
@@ -21,7 +28,7 @@ class BiometricService {
   static Future<List<BiometricType>> getAvailableBiometrics() async {
     try {
       return await _auth.getAvailableBiometrics();
-    } on PlatformException {
+    } catch (_) {
       return <BiometricType>[];
     }
   }

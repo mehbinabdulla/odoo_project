@@ -1,10 +1,14 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/project_models.dart';
 import '../services/odoo_rpc_service.dart';
 import 'session_provider.dart';
 
 class ProjectProvider with ChangeNotifier {
-  final SessionProvider sessionProvider;
+  SessionProvider sessionProvider;
+
+  Timer? _filterDebounce;
+  int _loadGen = 0;
 
   List<ProjectModel> _projects = [];
   int _totalProjectCount = 0;
@@ -31,16 +35,35 @@ class ProjectProvider with ChangeNotifier {
 
   ProjectProvider({required this.sessionProvider});
 
+  /// Called by the ChangeNotifierProxyProvider `update:` callback so the
+  /// latest SessionProvider is always propagated.
+  void updateSession(SessionProvider session) {
+    sessionProvider = session;
+  }
 
+  @override
+  void dispose() {
+    _filterDebounce?.cancel();
+    super.dispose();
+  }
 
   void setSearch(String q) {
     _searchQuery = q;
-    loadProjects(showLoading: true);
+    _debouncedLoad();
   }
 
   void setFilter(String status) {
     _filterStatus = status;
-    loadProjects(showLoading: true);
+    _debouncedLoad();
+  }
+
+  void _debouncedLoad() {
+    _filterDebounce?.cancel();
+    // Invalidate any in-flight fresh load so its stale results are dropped.
+    _loadGen++;
+    _filterDebounce = Timer(const Duration(milliseconds: 400), () {
+      loadProjects(showLoading: true);
+    });
   }
 
 
@@ -62,6 +85,8 @@ class ProjectProvider with ChangeNotifier {
   }
 
   Future<void> loadProjects({bool showLoading = true, bool loadMore = false}) async {
+    // loadMore must not invalidate the in-flight fresh load's generation.
+    final int gen = loadMore ? _loadGen : ++_loadGen;
     if (loadMore) {
       if (!_hasMore || _isLoadingMore || _isLoading) return;
       _isLoadingMore = true;
@@ -113,7 +138,8 @@ class ProjectProvider with ChangeNotifier {
       );
       
       final newProjects = raw.map((e) => ProjectModel.fromJson(e)).toList();
-      
+
+      if (gen != _loadGen) return; // superseded by a newer request
       if (loadMore) {
         _projects.addAll(newProjects);
       } else {
@@ -191,6 +217,8 @@ class ProjectProvider with ChangeNotifier {
       );
       return raw.map((e) => TaskModel.fromJson(e)).toList();
     } catch (e) {
+      _error = e.toString().replaceFirst('Exception: ', '');
+      notifyListeners();
       return [];
     }
   }
@@ -202,7 +230,9 @@ class ProjectProvider with ChangeNotifier {
         ids: [taskId],
         values: {'stage_id': stageId},
       );
-    } catch (_) {
+    } catch (e) {
+      _error = e.toString().replaceFirst('Exception: ', '');
+      notifyListeners();
       return false;
     }
   }
@@ -214,7 +244,9 @@ class ProjectProvider with ChangeNotifier {
         ids: [taskId],
         values: {'state': state},
       );
-    } catch (_) {
+    } catch (e) {
+      _error = e.toString().replaceFirst('Exception: ', '');
+      notifyListeners();
       return false;
     }
   }
@@ -228,7 +260,9 @@ class ProjectProvider with ChangeNotifier {
         order: 'sequence asc',
       );
       return raw.map((e) => ProjectStageModel.fromJson(e)).toList();
-    } catch (_) {
+    } catch (e) {
+      _error = e.toString().replaceFirst('Exception: ', '');
+      notifyListeners();
       return [];
     }
   }
@@ -247,7 +281,9 @@ class ProjectProvider with ChangeNotifier {
         }
       }
       return result;
-    } catch (_) {
+    } catch (e) {
+      _error = e.toString().replaceFirst('Exception: ', '');
+      notifyListeners();
       return false;
     }
   }

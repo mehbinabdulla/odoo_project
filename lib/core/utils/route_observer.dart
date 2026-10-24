@@ -11,6 +11,10 @@ mixin RouteAwareRefetchMixin<T extends StatefulWidget> on State<T> implements Ro
     super.didChangeDependencies();
     final route = ModalRoute.of(context);
     if (route != null) {
+      // Unsubscribe first: didChangeDependencies can run multiple times for
+      // the same State (e.g. when an InheritedWidget updates), and
+      // subscribing twice throws.
+      routeObserver.unsubscribe(this);
       routeObserver.subscribe(this, route as ModalRoute<void>);
     }
   }

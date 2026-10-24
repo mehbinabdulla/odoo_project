@@ -61,7 +61,10 @@ class _SearchFilterBarState<T> extends State<SearchFilterBar<T>> {
           controller: widget.controller,
           decoration: InputDecoration(
             isDense: true,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 14,
+              vertical: 12,
+            ),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(16),
               borderSide: BorderSide.none,
@@ -72,12 +75,18 @@ class _SearchFilterBarState<T> extends State<SearchFilterBar<T>> {
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(16),
-              borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
+              borderSide: const BorderSide(
+                color: AppColors.primary,
+                width: 1.5,
+              ),
             ),
             fillColor: isDark ? AppColors.darkCard : AppColors.lightCard,
             filled: true,
             hintText: widget.hintText,
-            prefixIcon: const Icon(PhosphorIconsRegular.magnifyingGlass, size: 18),
+            prefixIcon: const Icon(
+              PhosphorIconsRegular.magnifyingGlass,
+              size: 18,
+            ),
             suffixIcon: ValueListenableBuilder<TextEditingValue>(
               valueListenable: widget.controller,
               builder: (context, value, child) {
@@ -86,6 +95,7 @@ class _SearchFilterBarState<T> extends State<SearchFilterBar<T>> {
                 }
                 return IconButton(
                   icon: const Icon(PhosphorIconsRegular.x, size: 16),
+                  tooltip: 'Clear search',
                   onPressed: () {
                     widget.onClear();
                     _focusNode.unfocus();
@@ -117,7 +127,9 @@ class _SearchFilterBarState<T> extends State<SearchFilterBar<T>> {
                       decoration: BoxDecoration(
                         color: isSelected
                             ? AppColors.primary
-                            : (isDark ? AppColors.darkCard : AppColors.lightCard),
+                            : (isDark
+                                  ? AppColors.darkCard
+                                  : AppColors.lightCard),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
                           color: isSelected
@@ -129,10 +141,11 @@ class _SearchFilterBarState<T> extends State<SearchFilterBar<T>> {
                         f.label,
                         style: GoogleFonts.poppins(
                           fontSize: 12,
-                          fontWeight:
-                              isSelected ? FontWeight.w600 : FontWeight.w500,
+                          fontWeight: isSelected
+                              ? FontWeight.w600
+                              : FontWeight.w500,
                           color: isSelected
-                              ? Colors.white
+                              ? theme.colorScheme.onPrimary
                               : theme.colorScheme.onSurface.withValues(
                                   alpha: 0.7,
                                 ),

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/project_models.dart';
@@ -6,7 +7,10 @@ import '../services/odoo_field_registry.dart';
 import 'session_provider.dart';
 
 class TimesheetProvider with ChangeNotifier {
-  final SessionProvider sessionProvider;
+  SessionProvider sessionProvider;
+
+  Timer? _filterDebounce;
+  int _loadGen = 0;
 
   List<TimesheetModel> _timesheets = [];
   bool _isLoading = false;
@@ -55,6 +59,27 @@ class TimesheetProvider with ChangeNotifier {
 
   TimesheetProvider({required this.sessionProvider});
 
+  /// Called by the ChangeNotifierProxyProvider `update:` callback so the
+  /// latest SessionProvider is always propagated.
+  void updateSession(SessionProvider session) {
+    sessionProvider = session;
+  }
+
+  @override
+  void dispose() {
+    _filterDebounce?.cancel();
+    super.dispose();
+  }
+
+  void _debouncedLoad() {
+    _filterDebounce?.cancel();
+    // Invalidate any in-flight fresh load so its stale results are dropped.
+    _loadGen++;
+    _filterDebounce = Timer(const Duration(milliseconds: 400), () {
+      loadTimesheets(showLoading: true);
+    });
+  }
+
 
 
   double get totalHours => _dashboardTotalHours;
@@ -71,30 +96,34 @@ class TimesheetProvider with ChangeNotifier {
   void setDateRange(DateTime start, DateTime end) {
     _startDate = start;
     _endDate = end;
-    loadTimesheets(showLoading: true);
+    _debouncedLoad();
   }
 
   void setProjectFilter(int? projectId) {
     _filterProjectId = projectId;
-    loadTimesheets(showLoading: true);
+    _debouncedLoad();
   }
 
   void setUserFilter(int? userId) {
     _filterUserId = userId;
     _isUserFilterInitialized = true;
-    loadTimesheets(showLoading: true);
+    _debouncedLoad();
   }
-
 
   void setSearch(String q) {
     _searchQuery = q;
-    loadTimesheets(showLoading: true);
+    _debouncedLoad();
   }
 
   Future<void> loadTimesheets({bool showLoading = true, bool loadMore = false}) async {
+    // loadMore must not invalidate the in-flight fresh load's generation.
+    final int gen = loadMore ? _loadGen : ++_loadGen;
     if (!_isUserFilterInitialized) {
-      _filterUserId = sessionProvider.userId;
-      _isUserFilterInitialized = true;
+      final uid = sessionProvider.userId;
+      if (uid != null) {
+        _filterUserId = uid;
+        _isUserFilterInitialized = true;
+      }
     }
 
     if (loadMore) {
@@ -149,7 +178,8 @@ class TimesheetProvider with ChangeNotifier {
       );
 
       final newTimesheets = raw.map((e) => TimesheetModel.fromJson(e)).toList();
-      
+
+      if (gen != _loadGen) return; // superseded by a newer request
       if (loadMore) {
         _timesheets.addAll(newTimesheets);
       } else {

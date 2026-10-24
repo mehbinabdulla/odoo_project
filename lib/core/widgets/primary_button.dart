@@ -24,7 +24,9 @@ class PrimaryButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final effectivePadding = padding ??
+    final onPrimary = Theme.of(context).colorScheme.onPrimary;
+    final effectivePadding =
+        padding ??
         (label != null
             ? const EdgeInsets.symmetric(vertical: 10, horizontal: 20)
             : const EdgeInsets.all(10));
@@ -43,17 +45,15 @@ class PrimaryButton extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (icon != null)
-                  Icon(icon, size: 16, color: Colors.white),
-                if (icon != null && label != null)
-                  const SizedBox(width: 8),
+                if (icon != null) Icon(icon, size: 16, color: onPrimary),
+                if (icon != null && label != null) const SizedBox(width: 8),
                 if (label != null)
                   Text(
                     label!,
                     style: GoogleFonts.poppins(
                       fontSize: fontSize ?? 13,
                       fontWeight: FontWeight.w600,
-                      color: Colors.white,
+                      color: onPrimary,
                     ),
                   ),
               ],

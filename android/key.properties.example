@@ -1,0 +1,6 @@
+# Copy this file to android/key.properties and fill in your release keystore
+# details. android/key.properties is gitignored and must never be committed.
+storePassword=<your-store-password>
+keyPassword=<your-key-password>
+keyAlias=<your-key-alias>
+storeFile=<path-to-your-keystore.jks>

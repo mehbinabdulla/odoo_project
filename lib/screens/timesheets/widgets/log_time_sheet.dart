@@ -34,24 +34,25 @@ class _LogTimeSheetState extends State<LogTimeSheet> {
   }
 
   Future<void> _loadInitialData() async {
+    if (widget.initialProjectId == null) return;
     final projectProvider = context.read<ProjectProvider>();
-    if (widget.initialProjectId != null) {
-      final project = projectProvider.projects.firstWhere(
-        (p) => p.id == widget.initialProjectId,
-        orElse: () => projectProvider.projects.first,
-      );
-      setState(() => _selectedProject = project);
-      
-      final tasks = await projectProvider.loadTasksForProject(project.id);
-      if (mounted) {
-        setState(() {
-          _tasks = tasks;
-          if (widget.initialTaskId != null) {
-            _selectedTask = tasks.where((t) => t.id == widget.initialTaskId).firstOrNull;
-          }
-        });
+    if (projectProvider.projects.isEmpty) return;
+    final project = projectProvider.projects.firstWhere(
+      (p) => p.id == widget.initialProjectId,
+      orElse: () => projectProvider.projects.first,
+    );
+    setState(() => _selectedProject = project);
+
+    final tasks = await projectProvider.loadTasksForProject(project.id);
+    if (!mounted) return;
+    setState(() {
+      _tasks = tasks;
+      if (widget.initialTaskId != null) {
+        _selectedTask = tasks
+            .where((t) => t.id == widget.initialTaskId)
+            .firstOrNull;
       }
-    }
+    });
   }
 
   @override
@@ -64,7 +65,7 @@ class _LogTimeSheetState extends State<LogTimeSheet> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final projects = context.read<ProjectProvider>().projects;
+    final projects = context.watch<ProjectProvider>().projects;
     final insets = MediaQuery.of(context).viewInsets;
 
     return Padding(
@@ -92,10 +93,14 @@ class _LogTimeSheetState extends State<LogTimeSheet> {
               Text('Log Time', style: theme.textTheme.titleLarge),
               const SizedBox(height: 20),
               DropdownButtonFormField<ProjectModel>(
-              initialValue: _selectedProject,
+                initialValue: _selectedProject,
                 decoration: const InputDecoration(
                   labelText: 'Project',
-                  prefixIcon: Icon(PhosphorIconsRegular.folder, color: AppColors.primary, size: 20),
+                  prefixIcon: Icon(
+                    PhosphorIconsRegular.folder,
+                    color: AppColors.primary,
+                    size: 20,
+                  ),
                 ),
                 items: projects.map((p) {
                   return DropdownMenuItem(value: p, child: Text(p.name));
@@ -107,9 +112,11 @@ class _LogTimeSheetState extends State<LogTimeSheet> {
                     _tasks = [];
                   });
                   if (p != null) {
-                    final tasks = await context
-                        .read<ProjectProvider>()
-                        .loadTasksForProject(p.id);
+                    final projectProvider = context.read<ProjectProvider>();
+                    final tasks = await projectProvider.loadTasksForProject(
+                      p.id,
+                    );
+                    if (!mounted) return;
                     setState(() => _tasks = tasks);
                   }
                 },
@@ -122,7 +129,11 @@ class _LogTimeSheetState extends State<LogTimeSheet> {
                   initialValue: _selectedTask,
                   decoration: const InputDecoration(
                     labelText: 'Task (optional)',
-                    prefixIcon: Icon(PhosphorIconsRegular.checkCircle, color: AppColors.accent, size: 20),
+                    prefixIcon: Icon(
+                      PhosphorIconsRegular.checkCircle,
+                      color: AppColors.accent,
+                      size: 20,
+                    ),
                   ),
                   items: _tasks.map((t) {
                     return DropdownMenuItem(value: t, child: Text(t.name));
@@ -140,8 +151,11 @@ class _LogTimeSheetState extends State<LogTimeSheet> {
                         child: TextFormField(
                           decoration: const InputDecoration(
                             labelText: 'Date',
-                            prefixIcon: Icon(PhosphorIconsRegular.calendarBlank,
-                                color: AppColors.primary, size: 18),
+                            prefixIcon: Icon(
+                              PhosphorIconsRegular.calendarBlank,
+                              color: AppColors.primary,
+                              size: 18,
+                            ),
                           ),
                           controller: TextEditingController(
                             text: DateFormat('MMM d, y').format(_date),
@@ -156,10 +170,15 @@ class _LogTimeSheetState extends State<LogTimeSheet> {
                       controller: _hoursController,
                       decoration: const InputDecoration(
                         labelText: 'Hours',
-                        prefixIcon: Icon(PhosphorIconsRegular.clock,
-                            color: AppColors.accent, size: 18),
+                        prefixIcon: Icon(
+                          PhosphorIconsRegular.clock,
+                          color: AppColors.accent,
+                          size: 18,
+                        ),
                       ),
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
                       validator: (v) {
                         final h = double.tryParse(v ?? '');
                         if (h == null || h <= 0) return 'Enter valid hours';
@@ -175,8 +194,11 @@ class _LogTimeSheetState extends State<LogTimeSheet> {
                 controller: _descController,
                 decoration: const InputDecoration(
                   labelText: 'Description',
-                  prefixIcon: Icon(PhosphorIconsRegular.fileText,
-                      color: AppColors.primary, size: 18),
+                  prefixIcon: Icon(
+                    PhosphorIconsRegular.fileText,
+                    color: AppColors.primary,
+                    size: 18,
+                  ),
                 ),
                 maxLines: 2,
               ),
@@ -211,6 +233,7 @@ class _LogTimeSheetState extends State<LogTimeSheet> {
       firstDate: DateTime(2020),
       lastDate: DateTime.now(),
     );
+    if (!mounted) return;
     if (picked != null) setState(() => _date = picked);
   }
 
@@ -231,16 +254,16 @@ class _LogTimeSheetState extends State<LogTimeSheet> {
       if (mounted) {
         Navigator.pop(context);
         if (!success) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Failed to log time')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('Failed to log time')));
         }
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('An error occurred')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('An error occurred')));
       }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);

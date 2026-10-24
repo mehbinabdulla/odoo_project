@@ -1,7 +1,12 @@
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:odoo_rpc/odoo_rpc.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// Secure-storage keys for secrets. Non-secrets stay in SharedPreferences.
 class OdooSessionModel {
+  static const _secureStorage = FlutterSecureStorage();
+  static const secureKeySessionId = 'sessionId';
+  static const secureKeyPassword = 'password';
   final String sessionId;
   final String userLogin;
   final String password;
@@ -87,9 +92,14 @@ class OdooSessionModel {
 
   Future<void> saveToPrefs() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('sessionId', sessionId);
+    // Secrets go to encrypted secure storage.
+    await _secureStorage.write(key: secureKeySessionId, value: sessionId);
+    await _secureStorage.write(key: secureKeyPassword, value: password);
+    // Remove any legacy secret copies from SharedPreferences.
+    await prefs.remove('sessionId');
+    await prefs.remove('password');
+    // Non-secrets stay in SharedPreferences.
     await prefs.setString('userLogin', userLogin);
-    await prefs.setString('password', password);
     await prefs.setString('database', database);
     await prefs.setString('serverUrl', serverUrl);
     if (userId != null) await prefs.setInt('userId', userId!);
@@ -115,9 +125,12 @@ class OdooSessionModel {
     final isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
     if (!isLoggedIn) return null;
 
-    final sessionId = prefs.getString('sessionId');
+    // Read secrets from secure storage, falling back to legacy prefs copies.
+    var sessionId = await _secureStorage.read(key: secureKeySessionId);
+    sessionId ??= prefs.getString('sessionId');
+    var password = await _secureStorage.read(key: secureKeyPassword);
+    password ??= prefs.getString('password');
     final userLogin = prefs.getString('userLogin');
-    final password = prefs.getString('password');
     final rawServerUrl = prefs.getString('serverUrl');
     final database = prefs.getString('database');
 
@@ -152,5 +165,31 @@ class OdooSessionModel {
           .where((e) => e > 0)
           .toList() ?? [],
     );
+  }
+
+  /// Session/auth keys owned by this model (SharedPreferences side).
+  static const prefsKeys = [
+    'sessionId', // legacy secret copy (migrated to secure storage)
+    'userLogin',
+    'password', // legacy secret copy (migrated to secure storage)
+    'database',
+    'serverUrl',
+    'userId',
+    'userName',
+    'expiresAt',
+    'serverVersion',
+    'selected_company_id',
+    'allowed_company_ids',
+    'isLoggedIn',
+  ];
+
+  /// Removes only this model's session/auth keys from prefs + secure storage.
+  static Future<void> clearStored() async {
+    final prefs = await SharedPreferences.getInstance();
+    for (final key in prefsKeys) {
+      await prefs.remove(key);
+    }
+    await _secureStorage.delete(key: secureKeySessionId);
+    await _secureStorage.delete(key: secureKeyPassword);
   }
 }

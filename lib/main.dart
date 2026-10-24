@@ -18,7 +18,7 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  SystemChrome.setPreferredOrientations([
+  await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
   ]);
@@ -40,22 +40,31 @@ void main() async {
           create: (ctx) => ProjectProvider(
             sessionProvider: ctx.read<SessionProvider>(),
           ),
-          update: (_, session, prev) =>
-              prev ?? ProjectProvider(sessionProvider: session),
+          update: (_, session, prev) {
+            if (prev == null) return ProjectProvider(sessionProvider: session);
+            prev.updateSession(session);
+            return prev;
+          },
         ),
         ChangeNotifierProxyProvider<SessionProvider, TimesheetProvider>(
           create: (ctx) => TimesheetProvider(
             sessionProvider: ctx.read<SessionProvider>(),
           ),
-          update: (_, session, prev) =>
-              prev ?? TimesheetProvider(sessionProvider: session),
+          update: (_, session, prev) {
+            if (prev == null) return TimesheetProvider(sessionProvider: session);
+            prev.updateSession(session);
+            return prev;
+          },
         ),
         ChangeNotifierProxyProvider<SessionProvider, TaskProvider>(
           create: (ctx) => TaskProvider(
             sessionProvider: ctx.read<SessionProvider>(),
           ),
-          update: (_, session, prev) =>
-              prev ?? TaskProvider(sessionProvider: session),
+          update: (_, session, prev) {
+            if (prev == null) return TaskProvider(sessionProvider: session);
+            prev.updateSession(session);
+            return prev;
+          },
         ),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
       ],
@@ -96,6 +105,20 @@ class _DoYourProjectsAppState extends State<DoYourProjectsApp> {
     final themeProvider = context.watch<ThemeProvider>();
     final sessionProvider = context.watch<SessionProvider>();
 
+    if (!sessionProvider.isInitialized) {
+      return MaterialApp(
+        navigatorKey: navigatorKey,
+        title: 'Do Your Projects',
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.lightTheme,
+        darkTheme: AppTheme.darkTheme,
+        themeMode: themeProvider.themeMode,
+        home: const Scaffold(
+          body: Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
+
     return MaterialApp(
       navigatorKey: navigatorKey,
       title: 'Do Your Projects',
@@ -129,45 +152,31 @@ class _SessionExpiredListener extends StatefulWidget {
 }
 
 class _SessionExpiredListenerState extends State<_SessionExpiredListener> {
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final sessionProvider = context.read<SessionProvider>();
-    final notificationProvider = context.read<NotificationProvider>();
+  bool _handled = false;
 
-    if (sessionProvider.isSessionExpired) {
-      // Clear expiry and show toast
-      sessionProvider.clearExpiry();
-      
-      // Delay to ensure it doesn't happen during build
+  @override
+  Widget build(BuildContext context) {
+    // Single listener: react to expiry flag changes here only.
+    // The _handled guard ensures the toast + logout fire exactly once
+    // per expiry event.
+    final isExpired =
+        context.select<SessionProvider, bool>((p) => p.isSessionExpired);
+
+    if (!isExpired) {
+      _handled = false;
+    } else if (!_handled) {
+      _handled = true;
+      final sessionProvider = context.read<SessionProvider>();
+      final notificationProvider = context.read<NotificationProvider>();
       Future.microtask(() {
+        sessionProvider.clearExpiry();
         notificationProvider.show(
           'Session expired. Please log in again.',
           type: AppNotificationType.error,
         );
-        
-        // Logout to trigger home property change in MaterialApp
+        // Logout triggers the home property change in MaterialApp.
         sessionProvider.logout();
       });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // Listen to changes
-    final isExpired = context.select<SessionProvider, bool>((p) => p.isSessionExpired);
-    
-    if (isExpired) {
-       final sessionProvider = context.read<SessionProvider>();
-       final notificationProvider = context.read<NotificationProvider>();
-       Future.microtask(() {
-         sessionProvider.clearExpiry();
-         notificationProvider.show(
-            'Session expired. Please log in again.',
-            type: AppNotificationType.error,
-          );
-          sessionProvider.logout();
-       });
     }
 
     return const SizedBox.shrink();

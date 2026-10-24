@@ -7,7 +7,8 @@ import '../../core/models/project_models.dart';
 import '../../core/providers/module_provider.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/search_filter_bar.dart';
-
+import '../../core/widgets/shimmer_card.dart';
+import '../../core/widgets/status_badge.dart';
 
 class ModulesScreen extends StatefulWidget {
   const ModulesScreen({super.key});
@@ -47,7 +48,9 @@ class _ModulesScreenState extends State<ModulesScreen> {
         onRefresh: () => provider.loadModules(showLoading: false),
         color: AppColors.primary,
         child: CustomScrollView(
-          physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+          physics: const AlwaysScrollableScrollPhysics(
+            parent: BouncingScrollPhysics(),
+          ),
           slivers: [
             SliverAppBar(
               floating: true,
@@ -82,12 +85,10 @@ class _ModulesScreenState extends State<ModulesScreen> {
           hintText: 'Search modules...',
           onChanged: (v) {
             provider.setSearch(v);
-            setState(() {});
           },
           onClear: () {
             _searchController.clear();
             provider.setSearch('');
-            setState(() {});
           },
           currentFilter: provider.filterState,
           onFilterChanged: (v) => provider.setFilter(v),
@@ -134,7 +135,7 @@ class _ModulesScreenState extends State<ModulesScreen> {
     if (provider.isLoading) {
       return SliverList(
         delegate: SliverChildBuilderDelegate(
-          (_, __) => const _ModuleSkeleton(),
+          (_, __) => const ShimmerCard(height: 80, borderRadius: 24),
           childCount: 8,
         ),
       );
@@ -240,18 +241,14 @@ class _ModuleCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: isDark ? AppColors.darkCard : AppColors.lightCard,
+        color: theme.cardTheme.color,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
-          width: 0.5,
-        ),
+        border: Border.all(color: theme.colorScheme.outline, width: 0.5),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -269,7 +266,9 @@ class _ModuleCard extends StatelessWidget {
               borderRadius: BorderRadius.circular(10),
             ),
             child: Icon(
-              module.application ? PhosphorIconsRegular.squaresFour : PhosphorIconsRegular.puzzlePiece,
+              module.application
+                  ? PhosphorIconsRegular.squaresFour
+                  : PhosphorIconsRegular.puzzlePiece,
               color: module.isInstalled
                   ? AppColors.statusDone
                   : AppColors.primary,
@@ -292,7 +291,11 @@ class _ModuleCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    _StateBadge(color: _stateColor, label: _stateLabel),
+                    StatusBadge(
+                      label: _stateLabel,
+                      color: _stateColor,
+                      showDot: true,
+                    ),
                   ],
                 ),
                 const SizedBox(height: 3),
@@ -324,7 +327,9 @@ class _ModuleCard extends StatelessWidget {
                             module.author!,
                             style: GoogleFonts.poppins(
                               fontSize: 10,
-                              color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                              color: theme.colorScheme.onSurface.withValues(
+                                alpha: 0.4,
+                              ),
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -335,7 +340,9 @@ class _ModuleCard extends StatelessWidget {
                         'v${module.latestVersion!}',
                         style: GoogleFonts.poppins(
                           fontSize: 10,
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.4,
+                          ),
                         ),
                       ),
                     ],
@@ -349,45 +356,6 @@ class _ModuleCard extends StatelessWidget {
     );
   }
 }
-
-class _StateBadge extends StatelessWidget {
-  final Color color;
-  final String label;
-
-  const _StateBadge({required this.color, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 5,
-            height: 5,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: GoogleFonts.poppins(
-              fontSize: 10,
-              color: color,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-
 
 class _MiniStat extends StatelessWidget {
   final String label;
@@ -427,22 +395,6 @@ class _MiniStat extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _ModuleSkeleton extends StatelessWidget {
-  const _ModuleSkeleton();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      height: 80,
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardTheme.color,
-        borderRadius: BorderRadius.circular(24),
       ),
     );
   }
