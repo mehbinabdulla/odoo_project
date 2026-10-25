@@ -113,6 +113,7 @@ class _TasksScreenState extends State<TasksScreen> {
           onFilterChanged: (v) => provider.setFilter(v),
           filters: const [
             SearchFilterItem(value: 'all', label: 'All Tasks'),
+            SearchFilterItem(value: 'my', label: 'My Tasks'),
             SearchFilterItem(value: 'todo', label: 'To Do'),
             SearchFilterItem(value: 'in_progress', label: 'In Progress'),
             SearchFilterItem(value: 'done', label: 'Done'),

@@ -489,8 +489,20 @@ class _OdooArchDetailViewState extends State<OdooArchDetailView> {
           started = true;
       }
     }
-    return out;
+    return out.where((w) => !_isZeroSized(w)).toList();
   }
+
+  /// Invisible placeholders — widgets that render nothing at all:
+  /// `SizedBox.shrink()` (zero width/height, not null!) and a bare
+  /// `SizedBox()`. Filtered out of group/container content so hidden
+  /// rows (statusbar with no pipeline data, fully-pruned chrome) stop
+  /// reserving phantom vertical slots in the pane, while real spacing
+  /// boxes (height:16) are kept.
+  static bool _isZeroSized(Widget w) =>
+      w is SizedBox &&
+      (w.width ?? 0) == 0 &&
+      (w.height ?? 0) == 0 &&
+      w.child == null;
 
   /// Rows for a group node: fields, then nested sub-groups (small
   /// heading + content), then nested notebooks, then plain containers
@@ -555,7 +567,7 @@ class _OdooArchDetailViewState extends State<OdooArchDetailView> {
           break;
       }
     }
-    return out;
+    return out.where((w) => !_isZeroSized(w)).toList();
   }
 
   /// One field row, styled by the Odoo widget that renders it on web.
@@ -574,13 +586,22 @@ class _OdooArchDetailViewState extends State<OdooArchDetailView> {
     // duplicate row); with no pipeline data everything stays hidden,
     // matching the pre-header-support behaviour.
     if (viewWidget == 'statusbar' || viewWidget == 'statusbar_duration') {
-      if (field.name == 'stage_id' && widget.stagePipeline.isNotEmpty) {
+      final currentName = widget.fieldValues['stage_id']?.toString();
+      // The screen's stage pipeline when the project.task.type RPC
+      // returned stages; otherwise degrade to the record's own
+      // hydrated stage — one highlighted chip, the same name/casing
+      // the list-view badge shows, instead of an empty row.
+      final pipeline = widget.stagePipeline.isNotEmpty
+          ? widget.stagePipeline
+          : (currentName != null && currentName.isNotEmpty
+                ? <Map<String, dynamic>>[
+                    {'name': currentName, 'current': true},
+                  ]
+                : const <Map<String, dynamic>>[]);
+      if (field.name == 'stage_id' && pipeline.isNotEmpty) {
         return Padding(
           padding: const EdgeInsets.only(bottom: 16),
-          child: _StagePipeline(
-            stages: widget.stagePipeline,
-            currentName: widget.fieldValues['stage_id']?.toString(),
-          ),
+          child: _StagePipeline(stages: pipeline, currentName: currentName),
         );
       }
       return const SizedBox.shrink();
@@ -838,7 +859,7 @@ class OdooArchTabStrip extends StatelessWidget implements PreferredSizeWidget {
 
 /// Web form-header statusbar (`<field name="stage_id"
 /// widget="statusbar"/>`): the task's stage path with the active
-/// stage in green and grey chevron separators —
+/// stage in the app primary color and grey chevron separators —
 /// `New › Ongoing › Completed`.
 class _StagePipeline extends StatelessWidget {
   final List<Map<String, dynamic>> stages;
@@ -852,7 +873,9 @@ class _StagePipeline extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    if (stages.length < 2) return const SizedBox.shrink();
+    // A single entry is allowed: it is the degraded fallback showing the
+    // record's own stage when the stage-table RPC never came back.
+    if (stages.isEmpty) return const SizedBox.shrink();
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       clipBehavior: Clip.none,
@@ -875,16 +898,25 @@ class _StagePipeline extends StatelessWidget {
     );
   }
 
-  /// Current stage = its configured stage color (or brand green when
-  /// the server stage carries none) with the elapsed-in-stage
-  /// duration badge right after the label; other stages are muted.
+  /// Current stage = its configured stage color (or the app's brand
+  /// primary when the server stage carries none) with its duration
+  /// badge in the same hue; other stages are muted but keep their own
+  /// badges — `New 11h › Ongoing 45m › Completed 9m`.
+  /// Active detection prefers the explicit `current` flag the screen
+  /// computes from the record's `stage_id` many2one id — name
+  /// comparison stays as a fallback because hydrated display names
+  /// may drift from the configured stage label.
   Widget _buildStageText(ThemeData theme, Map<String, dynamic> stage) {
     final name = stage['name']?.toString() ?? '';
-    final active = name == currentName;
+    final active =
+        stage['current'] == true || (currentName != null && name == currentName);
     final colorIndex = stage['color'] is num ? (stage['color'] as num).toInt() : 0;
+    // Current stage: its configured stage color when the server sets
+    // one, otherwise the app's PRIMARY brand color — the green
+    // `statusDone` reads as a checkbox "done", not as the highlight.
     final activeColor =
-        (colorIndex > 0 ? _stageColor(colorIndex) : AppColors.statusDone) ??
-        AppColors.statusDone;
+        (colorIndex > 0 ? _stageColor(colorIndex) : AppColors.primary) ??
+        AppColors.primary;
     final duration = stage['duration']?.toString();
 
     return Row(
@@ -900,14 +932,16 @@ class _StagePipeline extends StatelessWidget {
                 : theme.colorScheme.onSurface.withValues(alpha: 0.45),
           ),
         ),
-        if (active && duration != null && duration.isNotEmpty) ...[
+        if (duration != null && duration.isNotEmpty) ...[
           const SizedBox(width: 5),
           Text(
             duration,
             style: GoogleFonts.poppins(
               fontSize: 12.5,
-              fontWeight: FontWeight.w700,
-              color: activeColor.withValues(alpha: 0.95),
+              fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+              color: active
+                  ? activeColor.withValues(alpha: 0.95)
+                  : theme.colorScheme.onSurface.withValues(alpha: 0.45),
             ),
           ),
         ],
@@ -1241,10 +1275,24 @@ class OdooArchLayoutParser {
           : doc.childElements.first,
     );
     final sheet = form.getElement('sheet');
-    roots = (sheet ?? form).childElements
-        .whereType<XmlElement>()
-        .where((e) => _isVisibleTopTag(e))
-        .toList();
+    // The form <header> (statusbar / statusbar_duration widgets — the
+    // stage pipeline row) is a SIBLING of the sheet in Odoo form
+    // archs. Parsing used to walk only the sheet's children, so the
+    // header — and with it the stage pipeline — never reached the
+    // renderer at all. Header nodes go first, like the web layout
+    // (statusbar above the sheet content).
+    final headers = sheet == null
+        ? const <XmlElement>[]
+        : form.childElements
+              .whereType<XmlElement>()
+              .where((e) => e.name.local == 'header');
+    final body = sheet ?? form;
+    roots = [
+      ...headers,
+      ...body.childElements.whereType<XmlElement>().where(
+            (e) => _isVisibleTopTag(e) || e.name.local == 'header',
+          ),
+    ].toList();
 
     final nodes = <_ArchNode>[];
     for (final el in roots) {

@@ -145,28 +145,47 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
   Future<void> _loadStages() async {
     final rawProject = _rawValues['project_id'];
     final projectId = rawProject is List && rawProject.isNotEmpty
-        ? rawProject[0]
+        ? (rawProject[0] is num ? (rawProject[0] as num).toInt() : rawProject[0])
         : null;
     final rawStage = _rawValues['stage_id'];
-    final currentStageId =
-        rawStage is List && rawStage.length >= 2 ? rawStage[0] : null;
-    final duration = _stageDurationText();
+    final currentStageId = rawStage is List && rawStage.length >= 2
+        ? (rawStage[0] is num ? (rawStage[0] as num).toInt() : rawStage[0])
+        : null;
+    // Per-stage elapsed times (stage id → "11h"), the same tracking
+    // data web's `statusbar_duration` widget badges EVERY pipeline
+    // stage with — `New 11h › Ongoing 45m › Completed` — not just the
+    // active one.
+    final durations = _stageDurations();
 
-    List<Map<String, dynamic>> rows;
-    try {
-      rows = await OdooRpcService.searchRead(
-        model: 'project.task.type',
-        domain: projectId != null
-            ? [
-                ['project_ids', '=', projectId],
-              ]
-            : const [
-                ['project_ids', '=', false],
-              ],
-        fields: const ['name', 'color'],
-        order: 'sequence',
-      );
-    } catch (_) {
+    List<Map<String, dynamic>> rows = const [];
+
+    // Tier 1: Odoo 13+ expresses stage→project as the `project_ids`
+    // m2m; a project-scoped task shows its own stage path. Mirrors the
+    // project kanban's proven query shape (`ProjectProvider.loadStages`
+    // — unique-id domain with `in`, plain id/name/sequence fields):
+    // some Cyllo-style proxies accept only that shape, so deviating
+    // from it is what leaves this screen with no pipeline while the
+    // kanban columns still load.
+    if (projectId != null) {
+      try {
+        rows = await OdooRpcService.searchRead(
+          model: 'project.task.type',
+          domain: [
+            ['project_ids', 'in', [projectId]],
+          ],
+          fields: const ['id', 'name', 'sequence', 'fold'],
+          order: 'sequence asc',
+        );
+      } catch (e) {
+        debugPrint(
+          '[stagePipeline] tier 1 (project_ids m2m) failed: '
+          '${e.toString().split("\n").first}',
+        );
+        rows = const [];
+      }
+    }
+    // Tier 2: legacy deployments carry the `project_id` m2o.
+    if (rows.isEmpty) {
       try {
         rows = await OdooRpcService.searchRead(
           model: 'project.task.type',
@@ -179,66 +198,220 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
               : const [
                   ['project_id', '=', false],
                 ],
-          fields: const ['name', 'color'],
-          order: 'sequence',
+          fields: const ['id', 'name', 'sequence'],
+          order: 'sequence asc',
         );
-      } catch (_) {
-        _stagePipeline.clear(); // no pipeline row on failure
-        return;
+      } catch (e) {
+        debugPrint(
+          '[stagePipeline] tier 2 (project_id m2o) failed: '
+          '${e.toString().split("\n").first}',
+        );
+        rows = const [];
       }
     }
+    // Tier 3: last resort — every stage of the model, sequence
+    // ordered. Cyllo/Studio DBs often share one global pipeline, and a
+    // visible pipeline beats a silently empty one. The current stage
+    // still highlights correctly by id.
+    if (rows.isEmpty) {
+      try {
+        rows = await OdooRpcService.searchRead(
+          model: 'project.task.type',
+          domain: const [],
+          fields: const ['id', 'name', 'sequence'],
+          order: 'sequence asc',
+        );
+      } catch (e) {
+        debugPrint(
+          '[stagePipeline] tier 3 (global) failed: '
+          '${e.toString().split("\n").first}',
+        );
+        rows = const [];
+      }
+    }
+
+    final entries = <Map<String, dynamic>>[
+      for (final r in rows)
+        {
+          if (r['id'] != null) 'id': r['id'],
+          'name': r['name'],
+          if (r['color'] != null) 'color': r['color'],
+          // Web parity: every stage that has tracking data shows its
+          // own badge ("New 11h › Ongoing 45m"); the current stage has
+          // no recorded interval yet, so it stays bare.
+          if (_durationForStage(r['id'], durations) != null) ...{
+            'duration': _durationForStage(r['id'], durations),
+          },
+          if (r['id'] != null &&
+              sameStageId(r['id'], currentStageId)) ...{
+            'current': true,
+          },
+        },
+    ];
+
+    // Last-ditch visual: every tier came back empty (model blocked for
+    // this tenant, RPC outage…). Show the task's own hydrated stage —
+    // highlighted, carrying its tracked duration when computable —
+    // instead of an empty row. The full pipeline appears whenever a
+    // tier succeeds again.
+    if (entries.isEmpty) {
+      final hydratedName = _fieldValues['stage_id']?.toString();
+      if (hydratedName != null && hydratedName.isNotEmpty) {
+        debugPrint(
+          '[stagePipeline] no stages fetched — degrading to the record '
+          'stage "$hydratedName"; duration map: '
+          '${durations.isEmpty ? "none" : "${durations.length} entries"}',
+        );
+        entries.add({
+          'name': hydratedName,
+          'current': true,
+        });
+      }
+    }
+
     _stagePipeline
       ..clear()
-      ..addAll([
-        for (final r in rows)
-          {
-            'id': r['id'],
-            'name': r['name'],
-            if (r['color'] != null) 'color': r['color'],
-            if (r['id'] != null && currentStageId == r['id'] && duration != null)
-              'duration': duration,
-          },
-      ]);
+      ..addAll(entries);
   }
 
-  /// Elapsed time in the current stage, formatted Odoo-style
-  /// ("11h", "3d", "25m"). Prefers the server-tracked
-  /// `duration_tracking` JSON (the same source the web
-  /// statusbar_duration widget consumes) and degrades gracefully to
-  /// the wall-clock delta since `date_last_stage_update`.
-  String? _stageDurationText() {
+  /// Stage-id equality tolerant of int/num/double jitter between the
+  /// RPC payload and the hydrated many2one value.
+  static bool sameStageId(Object? a, Object? b) {
+    if (a == null || b == null) return false;
+    final na = a is num ? a : num.tryParse(a.toString());
+    final nb = b is num ? b : num.tryParse(b.toString());
+    if (na != null && nb != null) return na.toInt() == nb.toInt();
+    return a.toString() == b.toString();
+  }
+
+  /// Per-stage elapsed times formatted Odoo-style ("11h", "3d",
+  /// "25m"), keyed by stage id — one badge per pipeline stage like
+  /// web's `statusbar_duration`: `New 11h › Ongoing 45m › Completed`.
+  /// Source of truth is the server-tracked `duration_tracking` JSON
+  /// (`project.task.type/<id>` → seconds); when tracking carries no
+  /// data at all it degrades to the wall-clock delta since
+  /// `date_last_stage_update`, attributed to the current stage.
+  Map<int, String> _stageDurations() {
     final rawStage = _rawValues['stage_id'];
-    final currentId = rawStage is List && rawStage.length >= 2
+    final rawCurrentId = rawStage is List && rawStage.length >= 2
         ? rawStage[0]
         : null;
-    if (currentId == null) return null;
+
+    String? humanized(double seconds) =>
+        seconds > 0 ? _humanizeStageDuration(seconds) : null;
+
+    final byId = <int, double>{};
+    // `duration_tracking` is a Json field: the RPC typically hands the
+    // app an ALREADY-DECODED map (`project.task.type/3` → 39600.0).
+    // Parsing strictly `is String` therefore silently discarded every
+    // real value and left only the wall-clock badge on one stage.
+    void accumulate(Object? rawKey, Object? rawValue) {
+      final double? value;
+      if (rawValue is num) {
+        value = rawValue.toDouble();
+      } else if (rawValue is String) {
+        value = num.tryParse(rawValue.trim())?.toDouble();
+      } else if (rawValue is Map) {
+        // Wrapped pairs ({v: 39600} / {duration: …}) still count.
+        value = () {
+          for (final k in const ['value', 'duration', 'seconds', 'time']) {
+            final v = rawValue[k];
+            final n = v is num
+                ? v.toDouble()
+                : v is String
+                    ? num.tryParse(v.trim())?.toDouble()
+                    : null;
+            if (n != null) return n;
+          }
+          return null;
+        }();
+      } else {
+        value = null;
+      }
+      if (value == null) return;
+      final key = '$rawKey';
+      // Standard keys are "project.task.type/<id>"; some backends
+      // store transition pairs ("…/3,project.task.type/7") where the
+      // interval ENDED at the last segment; bare ids are tolerated.
+      const idRe = 'project\\.task\\.type/\\s*(\\d+)';
+      final RegExpMatch? match = switch (key) {
+        final k when k.contains(',') =>
+          RegExp(idRe).allMatches(k.split(',').last).lastOrNull,
+        final k when RegExp(idRe).allMatches(k).length > 1 =>
+          RegExp(idRe).allMatches(k).last,
+        final k => RegExp(idRe).firstMatch(k),
+      };
+      final id = (match != null
+              ? int.tryParse(match.group(1) ?? '')
+              : null) ??
+          int.tryParse(key.trim());
+      if (id != null) {
+        byId[id] = (byId[id] ?? 0) + value;
+      }
+    }
 
     final rawTracking = _rawValues['duration_tracking'];
-    if (rawTracking is String && rawTracking.trim().isNotEmpty) {
+    if (rawTracking is Map) {
+      for (final entry in rawTracking.entries) {
+        accumulate(entry.key, entry.value);
+      }
+    } else if (rawTracking is List) {
+      // Paired arrays ("stageId,seconds") or chip-strings still count.
+      for (final item in rawTracking) {
+        if (item is Map) {
+          for (final entry in item.entries) {
+            accumulate(entry.key, entry.value);
+          }
+        } else if (item is List && item.length >= 2) {
+          accumulate(item[0], item[1]);
+        } else {
+          accumulate(item, null);
+        }
+      }
+    } else if (rawTracking is String && rawTracking.trim().isNotEmpty) {
       try {
         final decoded = jsonDecode(rawTracking);
         if (decoded is Map) {
-          var seconds = 0.0;
           for (final entry in decoded.entries) {
-            // Keys look like "project.task.type/3,project.task.type/7"
-            // — accumulate every interval that ENDS at the current
-            // stage (task could loop back into it).
-            final parts = entry.key.toString().split(',');
-            final toId = parts.length == 2 ? int.tryParse(
-              RegExp(r'(\d+)\s*$').firstMatch(parts[1])?.group(0) ?? '',
-            ) : null;
-            final value = entry.value is num
-                ? entry.value as num
-                : num.tryParse(entry.value.toString());
-            if (toId != null && toId == currentId && value != null) {
-              seconds += value;
-            }
+            accumulate(entry.key, entry.value);
           }
-          if (seconds > 0) return _humanizeStageDuration(seconds);
         }
       } catch (_) {/* fall through to the wall clock */}
     }
 
+    if (byId.isNotEmpty) {
+      debugPrint(
+        '[stagePipeline] tracked stage times — ${byId.length} entries: '
+        '${byId.map((k, v) => MapEntry(k, _humanizeStageDuration(v)))}',
+      );
+    } else if (rawTracking != null && rawTracking != false) {
+      final raw = rawTracking.toString();
+      debugPrint(
+        '[stagePipeline] duration_tracking yielded no stage times — '
+        'raw ${rawTracking.runtimeType}: '
+        '"${raw.substring(0, raw.length > 240 ? 240 : raw.length)}"',
+      );
+    } else {
+      debugPrint(
+        '[stagePipeline] duration_tracking absent from the task payload '
+        '— falling back to the wall clock',
+      );
+    }
+
+    final durations = <int, String>{};
+    for (final e in byId.entries) {
+      final text = humanized(e.value);
+      if (text != null) durations[e.key] = text;
+    }
+    if (durations.isNotEmpty) return durations;
+
+    // Nothing tracked on the server — the only known interval is the
+    // time spent sitting in the CURRENT stage.
+    if (rawCurrentId == null) return const {};
+    final currentId = rawCurrentId is num
+        ? rawCurrentId.toInt()
+        : int.tryParse(rawCurrentId.toString());
+    if (currentId == null) return const {};
     final enteredAt = _rawValues['date_last_stage_update'];
     if (enteredAt is String && enteredAt.isNotEmpty) {
       final local = DateTime.tryParse(enteredAt);
@@ -254,17 +427,31 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
         );
         final seconds =
             DateTime.now().toUtc().difference(utc).inSeconds.clamp(0, 1 << 30);
-        return _humanizeStageDuration(seconds.toDouble());
+        final text = humanized(seconds.toDouble());
+        if (text != null) return {currentId: text};
       }
     }
-    return null;
+    return const {};
+  }
+
+  /// Stage-row id (num/num-doubled/string from RPC payloads) → the
+  /// badge text tracked for that stage, if any.
+  static String? _durationForStage(Object? stageId, Map<int, String> durations) {
+    final id = stageId is num
+        ? stageId.toInt()
+        : int.tryParse(stageId.toString());
+    return id == null ? null : durations[id];
   }
 
   /// Web-like duration text: minutes under an hour, hours under a
-  /// day, days beyond that.
+  /// day, days beyond that — `45m`, `11h`, `3d`.
+  /// [seconds] are REAL seconds; the old version rounded raw seconds
+  /// straight into the minutes slot ("379m" for 6 minutes).
   static String _humanizeStageDuration(double seconds) {
-    final hours = seconds / 3600;
-    if (hours < 1) return '${seconds.round()}m';
+    final minutes = seconds / 60;
+    if (minutes < 1) return '${seconds.round()}s';
+    if (minutes < 60) return '${minutes.round()}m';
+    final hours = minutes / 60;
     if (hours < 24) return '${hours.round()}h';
     return '${(hours / 24).round()}d';
   }

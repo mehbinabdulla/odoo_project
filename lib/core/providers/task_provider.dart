@@ -18,7 +18,7 @@ class TaskProvider with ChangeNotifier {
   int _totalTaskCount = 0;
   String? _error;
   String _searchQuery = '';
-  String _filterState = 'all'; // all, todo, in_progress, done, cancelled
+  String _filterState = 'all'; // all, my, todo, in_progress, done, cancelled
 
   List<TaskModel> get tasks => _tasks;
   bool get isLoading => _isLoading;
@@ -94,7 +94,20 @@ class TaskProvider with ChangeNotifier {
       if (_searchQuery.isNotEmpty) {
         fetchDomain.add(['name', 'ilike', _searchQuery]);
       }
-      if (_filterState != 'all') {
+      if (_filterState == 'my') {
+        // "My Tasks" = assigned to the signed-in user — `user_ids`
+        // (project m2m since Odoo 15), `user_id` before that, matching
+        // the web action's domain. No session id → no clause (the chip
+        // degrades to All).
+        final uid = sessionProvider.userId;
+        if (uid != null) {
+          fetchDomain.add(
+            sessionProvider.majorVersion >= 15
+                ? ['user_ids', 'in', [uid]]
+                : ['user_id', '=', uid],
+          );
+        }
+      } else if (_filterState != 'all') {
         if (sessionProvider.majorVersion >= 16) {
           fetchDomain.add(['state', '=', _filterState]);
         }
