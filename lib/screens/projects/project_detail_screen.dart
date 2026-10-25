@@ -8,6 +8,8 @@ import '../../core/providers/project_provider.dart';
 import '../../core/providers/session_provider.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/collapsing_app_bar_page.dart';
+import '../../core/widgets/odoo_arch_detail_view.dart';
+import '../../core/widgets/status_badge.dart';
 import '../../core/widgets/search_filter_bar.dart';
 import '../tasks/task_detail_screen.dart';
 import '../tasks/task_form_screen.dart';
@@ -16,7 +18,6 @@ import '../../core/services/odoo_field_registry.dart';
 import '../../core/services/odoo_rpc_service.dart';
 import '../../core/utils/route_observer.dart';
 import '../../core/widgets/odoo_detail_sections.dart';
-
 
 class ProjectDetailScreen extends StatefulWidget {
   final ProjectModel project;
@@ -52,6 +53,9 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
   Map<String, dynamic> _fieldDefs = {};
+  // Form view arch + widget hints (strict arch-mode for the popup).
+  Map<String, String> _viewWidgets = {};
+  String? _arch;
   Map<String, dynamic> _fieldValues = {};
 
   // Pagination state for Tasks List tab
@@ -80,7 +84,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
     super.dispose();
   }
 
-  Future<void> _loadData() async {
+  Future<void> _loadData({bool force = false}) async {
     setState(() {
       _isLoading = true;
       _error = null;
@@ -89,16 +93,17 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
       final provider = context.read<ProjectProvider>();
       final results = await Future.wait([
         provider.loadStages(widget.project.id),
-        OdooFieldRegistry.getFieldDefs('project.project'),
+        OdooFieldRegistry.getFieldDefs('project.project', force: force),
       ]);
 
       _stages = results[0] as List<ProjectStageModel>;
       _fieldDefs = results[1] as Map<String, dynamic>;
+      _viewWidgets = await OdooFieldRegistry.getViewWidgets('project.project');
+      _arch = await OdooFieldRegistry.getFormArch('project.project');
 
       // Initialize kanban states
       _kanbanState = {
-        for (var stage in _stages)
-          stage.id: KanbanColumnState(stage: stage)
+        for (var stage in _stages) stage.id: KanbanColumnState(stage: stage),
       };
 
       // Fetch dynamic fields for the project
@@ -107,14 +112,16 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
       try {
         records = await OdooRpcService.safeSearchRead(
           model: 'project.project',
-          domain: [['id', '=', widget.project.id]],
+          domain: [
+            ['id', '=', widget.project.id],
+          ],
           fields: fieldsToFetch,
         );
         if (records.isNotEmpty) {
           _fieldValues = records[0];
         }
-      } catch (e) {
-        debugPrint('Dynamic field fetch failed (non-fatal): $e');
+      } catch (_) {
+        // detail pane falls back to the card's own field values.
       }
 
       // Initial task loads
@@ -136,7 +143,10 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
     }
   }
 
-  Future<void> _loadListTasks({bool reset = false, bool showLoading = true}) async {
+  Future<void> _loadListTasks({
+    bool reset = false,
+    bool showLoading = true,
+  }) async {
     if (reset) {
       _listOffset = 0;
       _listHasMore = true;
@@ -166,8 +176,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
         _listOffset += newTasks.length;
         _listHasMore = newTasks.length >= 50;
       });
-    } catch (e) {
-      debugPrint('Failed to load list tasks: $e');
+    } catch (_) {
     } finally {
       if (mounted) {
         setState(() {
@@ -179,7 +188,9 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
   }
 
   Future<void> _loadAllKanbanColumns({bool reset = false}) async {
-    final futures = _stages.map((stage) => _loadKanbanColumn(stage.id, reset: reset));
+    final futures = _stages.map(
+      (stage) => _loadKanbanColumn(stage.id, reset: reset),
+    );
     await Future.wait(futures);
   }
 
@@ -217,8 +228,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
         state.offset += newTasks.length;
         state.hasMore = newTasks.length >= 20;
       });
-    } catch (e) {
-      debugPrint('Failed to load kanban column tasks: $e');
+    } catch (_) {
     } finally {
       if (mounted) setState(() => state.isLoadingMore = false);
     }
@@ -244,7 +254,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
       length: (_isLoading || _stages.isNotEmpty) ? 3 : 2,
       child: CollapsingAppBarPage(
         title: widget.project.name,
-        onRefresh: _loadData,
+        onRefresh: () => _loadData(force: true),
         titleWidget: Text(
           widget.project.name,
           style: GoogleFonts.dmSerifDisplay(
@@ -307,11 +317,11 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
         ),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(48),
-          child: Container(
+          child: SizedBox(
             width: double.infinity,
-            padding: const EdgeInsets.only(left: 16, right: 16),
             child: TabBar(
-              isScrollable: true,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              // isScrollable: true,
               tabAlignment: TabAlignment.start,
               dividerColor: theme.dividerColor,
               labelColor: theme.colorScheme.onSurface,
@@ -413,13 +423,15 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
           '${widget.project.taskCount}',
           PhosphorIconsRegular.listChecks,
         ),
-        if (widget.project.allocatedHours != null && widget.project.allocatedHours! > 0)
+        if (widget.project.allocatedHours != null &&
+            widget.project.allocatedHours! > 0)
           _detailItem(
             'Allocated Hours',
             '${widget.project.allocatedHours!.toStringAsFixed(2)}h',
             PhosphorIconsRegular.hourglass,
           ),
-        if (widget.project.effectiveHours != null && widget.project.effectiveHours! > 0)
+        if (widget.project.effectiveHours != null &&
+            widget.project.effectiveHours! > 0)
           _detailItem(
             'Effective Hours',
             '${widget.project.effectiveHours!.toStringAsFixed(2)}h',
@@ -430,8 +442,9 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
   }
 
   Widget _detailItem(String label, String value, IconData icon) {
-    final labelColor =
-        Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5);
+    final labelColor = Theme.of(
+      context,
+    ).colorScheme.onSurface.withValues(alpha: 0.5);
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Row(
@@ -465,8 +478,6 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
       ),
     );
   }
-
-
 
   Widget _buildTaskList(ThemeData theme) {
     if (_isLoading) {
@@ -548,7 +559,11 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
                   child: ListView.builder(
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.only(
-                        top: 16, bottom: 80, left: 16, right: 16),
+                      top: 16,
+                      bottom: 80,
+                      left: 16,
+                      right: 16,
+                    ),
                     itemCount: _listTasks.length + (_isListLoadingMore ? 1 : 0),
                     itemBuilder: (_, i) {
                       if (i == _listTasks.length) {
@@ -556,7 +571,8 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
                           padding: EdgeInsets.all(16.0),
                           child: Center(
                             child: CircularProgressIndicator(
-                                color: AppColors.primary),
+                              color: AppColors.primary,
+                            ),
                           ),
                         );
                       }
@@ -581,18 +597,18 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
     }
 
     return ListView.builder(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.all(16),
-            itemCount: _stages.length,
-            itemBuilder: (_, i) {
-              final stage = _stages[i];
-              final state = _kanbanState[stage.id];
-              if (state == null) return const SizedBox();
-              return _KanbanColumn(
-                state: state,
-                onLoadMore: () => _loadKanbanColumn(stage.id),
-              );
-            },
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.all(16),
+      itemCount: _stages.length,
+      itemBuilder: (_, i) {
+        final stage = _stages[i];
+        final state = _kanbanState[stage.id];
+        if (state == null) return const SizedBox();
+        return _KanbanColumn(
+          state: state,
+          onLoadMore: () => _loadKanbanColumn(stage.id),
+        );
+      },
     );
   }
 
@@ -660,63 +676,71 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen>
             ),
             const SizedBox(height: 20),
             Expanded(
-              child: displayFields.isEmpty
-                  ? Center(
-                      child: Text(
-                        'No additional details available',
-                        style: GoogleFonts.poppins(
-                          color: theme.colorScheme.onSurface.withValues(
-                            alpha: 0.4,
+              child: OdooArchDetailView(
+                arch: _arch,
+                fieldDefs: _fieldDefs,
+                fieldValues: _fieldValues,
+                viewWidgets: _viewWidgets,
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                fallback: displayFields.isEmpty
+                    ? Center(
+                        child: Text(
+                          'No additional details available',
+                          style: GoogleFonts.poppins(
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.4,
+                            ),
                           ),
                         ),
-                      ),
-                    )
-                  : ListView.separated(
-                      padding: const EdgeInsets.fromLTRB(24, 0, 24, 40),
-                      itemCount: displayFields.length,
-                      separatorBuilder: (_, __) => Divider(
-                        height: 32,
-                        color: theme.dividerColor.withValues(alpha: 0.5),
-                      ),
-                      itemBuilder: (ctx, i) {
-                        final key = displayFields[i];
-                        final def = _fieldDefs[key];
-                        final label = def['string'] ?? key;
-                        final val = _fieldValues[key];
+                      )
+                    : ListView.separated(
+                        shrinkWrap: true,
+                        padding: const EdgeInsets.fromLTRB(24, 0, 24, 40),
+                        itemCount: displayFields.length,
+                        separatorBuilder: (_, __) => Divider(
+                          height: 32,
+                          color: theme.dividerColor.withValues(alpha: 0.5),
+                        ),
+                        itemBuilder: (ctx, i) {
+                          final key = displayFields[i];
+                          final def = _fieldDefs[key];
+                          final label = def['string'] ?? key;
+                          final val = _fieldValues[key];
 
-                        final displayVal =
-                            OdooDetailSections.detailDisplayValue(def, val);
+                          final displayVal =
+                              OdooDetailSections.detailDisplayValue(def, val);
 
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              label,
-                              style: GoogleFonts.poppins(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: theme.colorScheme.onSurface.withValues(
-                                  alpha: 0.4,
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                label,
+                                style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: theme.colorScheme.onSurface.withValues(
+                                    alpha: 0.4,
+                                  ),
                                 ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              displayVal,
-                              style: GoogleFonts.poppins(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w500,
-                                color: theme.colorScheme.onSurface,
+                              const SizedBox(height: 4),
+                              Text(
+                                displayVal,
+                                style: GoogleFonts.poppins(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w500,
+                                  color: theme.colorScheme.onSurface,
+                                ),
+                                maxLines: 3,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              maxLines: 3,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
-                        );
-                      },
-                    ),
+                            ],
+                          );
+                        },
+                      ),
+              ),
             ),
           ],
         ),
@@ -731,15 +755,9 @@ class _TaskListItem extends StatelessWidget {
   const _TaskListItem({required this.task});
 
   Color _stateColor(String? stageName) {
-    final String label = stageName?.isNotEmpty == true ? stageName! : 'No Stage';
-    final colors = [
-      AppColors.statusTodo,
-      AppColors.statusInProgress,
-      AppColors.statusDone,
-      AppColors.statusReview,
-      AppColors.accentPink,
-    ];
-    return colors[label.hashCode.abs() % colors.length];
+    // Centralized Odoo-legend mapping (semantic keywords first, stable
+    // hash for free-form stage names) — matches the detail-screen chip.
+    return statusColorForLabel(stageName);
   }
 
   @override
@@ -801,7 +819,12 @@ class _TaskListItem extends StatelessWidget {
                   ),
                   if (task.stageName != null) ...[
                     const SizedBox(height: 4),
-                    Text(task.stageName!, style: theme.textTheme.bodySmall, maxLines: 1, overflow: TextOverflow.ellipsis,),
+                    Text(
+                      task.stageName!,
+                      style: theme.textTheme.bodySmall,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ],
                 ],
               ),
@@ -946,7 +969,9 @@ class _KanbanColumn extends StatelessWidget {
                     return const Padding(
                       padding: EdgeInsets.symmetric(vertical: 16),
                       child: Center(
-                        child: CircularProgressIndicator(color: AppColors.primary),
+                        child: CircularProgressIndicator(
+                          color: AppColors.primary,
+                        ),
                       ),
                     );
                   }
@@ -980,7 +1005,9 @@ class _KanbanCard extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final sessionProvider = context.read<SessionProvider>();
     final serverUrl = sessionProvider.serverUrl;
-    final avatarUrl = serverUrl != null ? task.getAvatarUrl(serverUrl) : null;
+    final sessionId = sessionProvider.session?.sessionId;    final avatarUrl = sessionId != null && sessionId.isNotEmpty
+        ? (serverUrl != null ? task.getAvatarUrl(serverUrl) : null)
+        : null;
 
     return GestureDetector(
       onTap: () => Navigator.push(
@@ -1034,12 +1061,20 @@ class _KanbanCard extends StatelessWidget {
                     padding: const EdgeInsets.only(right: 8),
                     child: CircleAvatar(
                       radius: 10,
-                      backgroundImage: NetworkImage(avatarUrl),
+                      backgroundColor: theme.colorScheme.outline.withValues(
+                        alpha: 0.3,
+                      ),
+                      backgroundImage: NetworkImage(avatarUrl, headers: {
+                        'Cookie': 'session_id=$sessionId',
+                      },),
+                      onBackgroundImageError: (_, __) {},
                     ),
                   ),
                 Expanded(
                   child: Text(
-                    task.userNames.isNotEmpty ? task.userNames.join(', ') : 'Unassigned',
+                    task.userNames.isNotEmpty
+                        ? task.userNames.join(', ')
+                        : 'Unassigned',
                     style: GoogleFonts.poppins(
                       fontSize: 11,
                       color: theme.colorScheme.onSurface.withValues(alpha: 0.6),

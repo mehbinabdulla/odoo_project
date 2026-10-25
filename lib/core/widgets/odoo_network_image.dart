@@ -79,6 +79,14 @@ class _OdooNetworkImageState extends State<OdooNetworkImage> {
         (acc, chunk) => acc..addAll(chunk),
       );
       final byteList = Uint8List.fromList(bytes);
+      if (!_looksLikeImage(byteList)) {
+        // Odoo sometimes answers image requests with an HTML login/401
+        // page (status 200) when the session cookie is dead — feeding
+        // that to the codec produces "Invalid image data" noise.
+        throw const FormatException(
+          'Response is not a decodable image (likely HTML error page)',
+        );
+      }
       _cache[widget.url] = byteList;
       if (mounted) {
         setState(() {
@@ -114,15 +122,14 @@ class _OdooNetworkImageState extends State<OdooNetworkImage> {
             ),
           );
     } else if (_error != null || _bytes == null) {
-      child = widget.errorBuilder?.call(context, _error ?? 'No data', null) ??
-          SizedBox(width: widget.width, height: widget.height);
+      child = _buildError(context, _error ?? 'No data', null);
     } else {
       child = Image.memory(
         _bytes!,
         width: widget.width,
         height: widget.height,
         fit: widget.fit,
-        errorBuilder: widget.errorBuilder,
+        errorBuilder: (_, Object e, StackTrace? st) => _buildError(context, e, st),
       );
     }
 
@@ -131,5 +138,49 @@ class _OdooNetworkImageState extends State<OdooNetworkImage> {
     }
 
     return child;
+  }
+
+  /// Falls back to a neutral placeholder when the caller provided no
+  /// [OdooNetworkImage.errorBuilder] — prevents "Invalid image data"
+  /// noise from crashing print-outs.
+  Widget _buildError(BuildContext context, Object error, StackTrace? st) {
+    return widget.errorBuilder?.call(context, error, st) ??
+        SizedBox(
+          width: widget.width,
+          height: widget.height,
+          child: Icon(
+            Icons.broken_image_outlined,
+            size: (widget.width ?? 40) * 0.6,
+            color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
+          ),
+        );
+  }
+
+  /// PNG / JPEG / GIF / WebP / BMP magic-byte sniffing.
+  static bool _looksLikeImage(Uint8List b) {
+    if (b.length < 8) return false;
+    // PNG
+    if (b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) {
+      return true;
+    }
+    // JPEG
+    if (b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) return true;
+    // GIF
+    if (b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46) return true;
+    // BMP
+    if (b[0] == 0x42 && b[1] == 0x4D) return true;
+    // WebP: "RIFF" + 4-size + "WEBP"
+    if (b[0] == 0x52 &&
+        b[1] == 0x49 &&
+        b[2] == 0x46 &&
+        b[3] == 0x46 &&
+        b.length >= 12 &&
+        b[8] == 0x57 &&
+        b[9] == 0x45 &&
+        b[10] == 0x42 &&
+        b[11] == 0x50) {
+      return true;
+    }
+    return false;
   }
 }

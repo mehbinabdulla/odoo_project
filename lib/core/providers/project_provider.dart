@@ -79,8 +79,8 @@ class ProjectProvider with ChangeNotifier {
       );
       _globalProjectStages = raw.map((e) => ProjectStageModel.fromJson(e)).toList();
       notifyListeners();
-    } catch (e) {
-      debugPrint('Failed to load project stages: $e');
+    } catch (_) {
+      // stages are decorative chrome; a failure just skips them.
     }
   }
 

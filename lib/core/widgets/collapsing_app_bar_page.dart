@@ -124,7 +124,8 @@ class _CollapsingHeaderDelegate extends SliverPersistentHeaderDelegate {
       old.theme != theme ||
       old.topPadding != topPadding ||
       old.expandedHeight != expandedHeight ||
-      old.actions.length != actions.length;
+      old.actions.length != actions.length ||
+      old.bottom != bottom;
 
   @override
   Widget build(
@@ -221,25 +222,33 @@ class _CollapsingHeaderDelegate extends SliverPersistentHeaderDelegate {
                 ),
               ),
             ),
+            // The expanded region shrinks with the scroll; content
+            // stays anchored to its bottom (just above the pinned
+            // bottom slot) and whatever no longer fits is clipped from
+            // the top instead of painting flex-overflow stripes.
             Expanded(
-              child: Opacity(
-                opacity: expandedTitleOpacity,
-                child: Align(
+              child: ClipRect(
+                child: OverflowBox(
                   alignment: Alignment.bottomLeft,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 0, 50, 20),
-                    child:
-                        titleWidget ??
-                        Text(
-                          title,
-                          style: GoogleFonts.dmSerifDisplay(
-                            fontSize: 30,
-                            height: 1.15,
-                            color: theme.colorScheme.onSurface,
+                  minHeight: 0,
+                  maxHeight: double.infinity,
+                  child: Opacity(
+                    opacity: expandedTitleOpacity,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 0, 50, 20),
+                      child:
+                          titleWidget ??
+                          Text(
+                            title,
+                            style: GoogleFonts.dmSerifDisplay(
+                              fontSize: 30,
+                              height: 1.15,
+                              color: theme.colorScheme.onSurface,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                    ),
                   ),
                 ),
               ),

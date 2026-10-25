@@ -65,8 +65,7 @@ class _ProjectFormScreenState extends State<ProjectFormScreen>
         if (records.isNotEmpty) {
           await applyFetchedRecord(records[0]);
         }
-      } catch (e) {
-        debugPrint('Error fetching project data: $e');
+      } catch (_) {
         if (!mounted) return;
         // Fallback from ProjectModel
         if (p.userId != null) {
@@ -101,8 +100,7 @@ class _ProjectFormScreenState extends State<ProjectFormScreen>
         );
         if (!mounted) return;
         await applyDefaultValues(defaults);
-      } catch (e) {
-        debugPrint('Error fetching defaults: $e');
+      } catch (_) {
       }
     }
     if (mounted) setState(() {});

@@ -98,8 +98,7 @@ class _TimesheetFormScreenState extends State<TimesheetFormScreen>
         if (records.isNotEmpty) {
           await applyFetchedRecord(records[0]);
         }
-      } catch (e) {
-        debugPrint('TimesheetFormScreen: error fetching record: $e');
+      } catch (_) {
         if (!mounted) return;
         // Fallback seeds
         if (t.projectId != null) {
@@ -123,8 +122,8 @@ class _TimesheetFormScreenState extends State<TimesheetFormScreen>
         );
         if (!mounted) return;
         await applyDefaultValues(defaults);
-      } catch (e) {
-        debugPrint('TimesheetFormScreen: error fetching defaults: $e');
+      } catch (_) {
+        // defaults are best-effort; the form still opens.
       }
       if (!mounted) return;
       // Default date to today

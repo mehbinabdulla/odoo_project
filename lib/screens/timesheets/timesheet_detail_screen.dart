@@ -6,6 +6,7 @@ import '../../core/services/odoo_field_registry.dart';
 import '../../core/services/odoo_rpc_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/collapsing_app_bar_page.dart';
+import '../../core/widgets/odoo_arch_detail_view.dart';
 import '../../core/widgets/odoo_detail_sections.dart';
 import '../../core/utils/route_observer.dart';
 import 'timesheet_form_screen.dart';
@@ -19,12 +20,17 @@ class TimesheetDetailScreen extends StatefulWidget {
   State<TimesheetDetailScreen> createState() => _TimesheetDetailScreenState();
 }
 
-class _TimesheetDetailScreenState extends State<TimesheetDetailScreen> with RouteAwareRefetchMixin {
+class _TimesheetDetailScreenState extends State<TimesheetDetailScreen>
+    with RouteAwareRefetchMixin {
   bool _isLoading = true;
 
   Map<String, dynamic> _fieldDefs = {};
   Map<String, dynamic> _fieldValues = {};
   Set<String> _visibleFields = {};
+  // View-level widget hints (widget="…") from the form view XML arch.
+  Map<String, String> _viewWidgets = {};
+  // Form view XML — drives the arch-based details layout.
+  String? _arch;
 
   // Fields that are always shown first (in order)
   final Set<String> _defaultFields = {
@@ -51,15 +57,26 @@ class _TimesheetDetailScreenState extends State<TimesheetDetailScreen> with Rout
     _loadData();
   }
 
-  Future<void> _loadData() async {
+  Future<void> _loadData({bool force = false}) async {
     if (mounted) setState(() => _isLoading = true);
 
-    final defs = await OdooFieldRegistry.getFieldDefs('account.analytic.line');
+    final defs = await OdooFieldRegistry.getFieldDefs(
+      'account.analytic.line',
+      force: force,
+    );
     if (!mounted) return;
 
     _fieldDefs = defs;
     _fieldValues = {};
     _visibleFields = Set.from(_defaultFields);
+    _viewWidgets = await OdooFieldRegistry.getViewWidgets(
+      'account.analytic.line',
+      force: force,
+    );
+    _arch = await OdooFieldRegistry.getFormArch(
+      'account.analytic.line',
+      force: force,
+    );
 
     try {
       final records = await OdooRpcService.searchRead(
@@ -114,7 +131,7 @@ class _TimesheetDetailScreenState extends State<TimesheetDetailScreen> with Rout
 
     return CollapsingAppBarPage(
       title: ts.name?.isNotEmpty == true ? ts.name! : 'Timesheet Entry',
-      onRefresh: _loadData,
+      onRefresh: () => _loadData(force: true),
       titleWidget: Text(
         hoursStr,
         style: GoogleFonts.dmSerifDisplay(
@@ -309,13 +326,20 @@ class _TimesheetDetailScreenState extends State<TimesheetDetailScreen> with Rout
           ),
         ),
 
-        OdooDetailGroups(
+        OdooArchDetailView(
+          arch: _arch,
           fieldDefs: _fieldDefs,
           fieldValues: _fieldValues,
-          metricFields: groups['metrics']!,
-          dateFields: groups['dates']!,
-          booleanFields: groups['booleans']!,
-          otherFields: groups['other']!,
+          viewWidgets: _viewWidgets,
+          fallback: OdooDetailGroups(
+            fieldDefs: _fieldDefs,
+            fieldValues: _fieldValues,
+            metricFields: groups['metrics']!,
+            dateFields: groups['dates']!,
+            booleanFields: groups['booleans']!,
+            otherFields: groups['other']!,
+            viewWidgets: _viewWidgets,
+          ),
         ),
         const SizedBox(height: 40),
       ],

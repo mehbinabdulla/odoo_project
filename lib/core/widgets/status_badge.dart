@@ -2,10 +2,57 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
 
+/// Visual recipe for an Odoo project-task state badge, matching the
+/// colors of the web state-selection legend:
+///   In Progress → neutral grey (tinted)  · Changes Requested → amber
+///   Approved → green                     · Done → green, solid
+///   Canceled → red, solid                · ( qualquer unknown → hash)
+class OdooStateBadgeStyle {
+  final Color color;
+  final bool filled;
+
+  const OdooStateBadgeStyle(this.color, {required this.filled});
+}
+
+/// Maps a task's `state` value (and/or its selection label) to the
+/// Odoo legend palette. Terminal states (`1_*` — done/canceled) render
+/// solid on the web, active states render as tinted pills.
+OdooStateBadgeStyle odooStateBadgeStyle(String? state, String? label) {
+  final key =
+      '${(state ?? '').toLowerCase()} ${(label ?? '').toLowerCase()}';
+  final filled = (state ?? '').toLowerCase().startsWith('1_');
+  if (key.contains('requested')) {
+    return OdooStateBadgeStyle(AppColors.statusReview, filled: filled);
+  }
+  if (key.contains('cancel')) {
+    return OdooStateBadgeStyle(AppColors.statusBlocked, filled: filled);
+  }
+  if (key.contains('approve') || key.contains('done') || filled) {
+    return OdooStateBadgeStyle(AppColors.statusDone, filled: filled);
+  }
+  return OdooStateBadgeStyle(AppColors.statusTodo, filled: filled);
+}
+
+/// [odooStateBadgeStyle] as a plain color.
+Color taskStateColor(String? state, String? label) =>
+    odooStateBadgeStyle(state, label).color;
+
 /// Returns a deterministic accent color for an arbitrary status/stage label.
 /// Shared by project, task and module badges so colors stay consistent.
+/// Odoo-legend keywords win first so "Done"/"Canceled"/"Approved"… names
+/// map to the same colors as the web client; free-form stage names fall
+/// back to a stable hash.
 Color statusColorForLabel(String? label) {
   if (label == null || label.isEmpty) return AppColors.statusTodo;
+  final key = label.toLowerCase();
+  if (key.contains('requested')) return AppColors.statusReview;
+  if (key.contains('cancel')) return AppColors.statusBlocked;
+  if (key.contains('approve') || key.contains('done') || key.contains('complete')) {
+    return AppColors.statusDone;
+  }
+  if (key.contains('progress') || key.contains('waiting') || key.contains('new') || key.contains('todo')) {
+    return AppColors.statusTodo;
+  }
   const colors = [
     AppColors.statusTodo,
     AppColors.statusInProgress,

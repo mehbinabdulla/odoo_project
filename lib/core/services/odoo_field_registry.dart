@@ -1,5 +1,6 @@
-import 'package:flutter/foundation.dart';
+import 'package:xml/xml.dart';
 import 'odoo_rpc_service.dart';
+import 'odoo_view_inheritance.dart';
 
 /// Discovers and caches ALL readable fields for an Odoo model by calling
 /// the server's native [fields_get] RPC method.
@@ -19,6 +20,10 @@ class OdooFieldRegistry {
   // model name → map of field_name to field_metadata (string, type, relation, selection)
   static final Map<String, Map<String, dynamic>> _cache = {};
 
+  // model name → map of field_name → view-level widget attr
+  // (from <field name="x" widget="badge"/> in the model's form view arch).
+  static final Map<String, Map<String, String>> _viewWidgets = {};
+
   // In-flight fetch deduplication
   static final Map<String, Future<Map<String, dynamic>>> _inFlight = {};
 
@@ -36,8 +41,20 @@ class OdooFieldRegistry {
   /// Call this right after a successful login (fire-and-forget is fine).
   static Future<void> preloadForLogin() => _preload(_coreModels);
 
-  /// Returns the full map of field definitions for [model].
-  static Future<Map<String, dynamic>> getFieldDefs(String model) async {
+  /// Returns the full map of field definitions for [model]. [force]
+  /// bypasses the session cache — use it after the form-view arch was
+  /// re-fetched, because a fresh arch can expose fields the cached
+  /// metadata never saw (e.g. Studio additions).
+  static Future<Map<String, dynamic>> getFieldDefs(
+    String model, {
+    bool force = false,
+  }) async {
+    if (force) {
+      final defs = await _fetchFieldDefs(model);
+      // Only cache if we actually got fields back (more than just 'id').
+      if (defs.length > 1) _cache[model] = defs;
+      return defs;
+    }
     if (_cache.containsKey(model)) return _cache[model]!;
     if (_inFlight.containsKey(model)) return _inFlight[model]!;
 
@@ -78,12 +95,10 @@ class OdooFieldRegistry {
         return result.cast<String>().toList();
       }
       // Fail closed: an unexpected RPC shape grants nothing.
-      debugPrint('OdooFieldRegistry: unexpected check_field_access_rights shape for $model; denying all.');
       return [];
-    } catch (e) {
+    } catch (_) {
       // Fail closed: if the check itself fails, grant nothing rather than
       // leaking fields the user may not read.
-      debugPrint('OdooFieldRegistry: check_field_access_rights failed for $model: $e');
       return [];
     }
   }
@@ -115,8 +130,7 @@ class OdooFieldRegistry {
       }
       
       return list;
-    } catch (e) {
-      debugPrint('OdooFieldRegistry error fetching technical fields for $model: $e');
+    } catch (_) {
       // Minimal fallback
       return ['id', 'create_uid', 'write_uid', 'create_date', 'write_date', 'active'];
     }
@@ -130,6 +144,9 @@ class OdooFieldRegistry {
   static void clear() {
     _cache.clear();
     _inFlight.clear();
+    _viewWidgets.clear();
+    _archCache.clear();
+    _archStamp.clear();
   }
 
   // ── Internal ───────────────────────────────────────────────────────────────
@@ -137,8 +154,8 @@ class OdooFieldRegistry {
   static Future<void> _preload(List<String> models) async {
     try {
       await Future.wait(models.map(getFieldNames));
-    } catch (e) {
-      debugPrint('OdooFieldRegistry preload failed: $e');
+    } catch (_) {
+      // preload is best-effort: failures surface when callers fetch.
     }
   }
 
@@ -165,11 +182,209 @@ class OdooFieldRegistry {
         return defs;
       }
       return {'id': {'string': 'ID', 'type': 'integer', 'readonly': true}};
-    } catch (e, st) {
-      debugPrint('OdooFieldRegistry error fetching fields for $model: $e\n$st');
+    } catch (_) {
       // If fields_get fails (permissions, old Odoo, etc.) return a fallback map
       // containing just 'id' so the app doesn't crash, but we don't cache it.
       return {'id': {'string': 'ID', 'type': 'integer', 'readonly': true}};
     }
+  }
+
+  /// View-level widget hints for [model] fields, e.g.
+  /// `{"favorite": "boolean_heart", "kanban_state": "state_selection"}`
+  /// — read once from the model's default form view XML arch
+  /// (`<field name="x" widget="badge"/>`) and cached.
+  ///
+  /// Empty map if unavailable (no access / fetch failure / missing xml pkg).
+  static Future<Map<String, String>> getViewWidgets(
+    String model, {
+    bool force = false,
+  }) async {
+    await getFormArch(model, force: force);
+    return _viewWidgets[model] ?? const {};
+  }
+
+  static final Map<String, String> _archCache = {};
+  static final Map<String, DateTime> _archStamp = {};
+
+  /// How long a fetched form-view arch is trusted before a background
+  /// refresh happens. Server-side view edits surface automatically.
+  static const Duration archTtl = Duration(minutes: 10);
+
+  /// The model's default form view XML arch — the source for both
+  /// [getViewWidgets] and arch-driven layouts. [force] (pull-to-refresh)
+  /// bypasses the TTL.
+  ///
+  /// Falls back to the last cached arch (if any) when refresh fails.
+  static Future<String?> getFormArch(String model, {bool force = false}) async {
+    final cached = _archCache[model];
+    final stamp = _archStamp[model];
+    final fresh =
+        cached != null &&
+        stamp != null &&
+        DateTime.now().difference(stamp) < archTtl;
+    if (!force && fresh) return cached;
+
+    String? arch;
+
+    // 1) Client-side combination — base arch + ALL inheriting views'
+    //    <xpath position="..."> patches, i.e. exactly what Odoo web
+    //    renders. Uses only searchRead on ir.ui.view, which works even
+    //    where get_views/get_view is unavailable.
+    try {
+      final base = await OdooRpcService.searchRead(
+        model: 'ir.ui.view',
+        domain: [
+          ['model', '=', model],
+          ['type', '=', 'form'],
+        ],
+        fields: ['id', 'arch'],
+        limit: 1,
+        order: 'priority asc',
+      );
+      if (base.isNotEmpty && base[0]['arch'] is String && base[0]['arch'].isNotEmpty) {
+        var merged = base[0]['arch'] as String;
+        // ALL form views inheriting this model's views (not just
+        // direct children of the base — chained ones are resolved by
+        // the merge retry passes). Empty archs are filtered
+        // client-side rather than via domain, so the search stays
+        // simple and portable.
+        final inherited = await OdooRpcService.searchRead(
+          model: 'ir.ui.view',
+          domain: [
+            ['model', '=', model],
+            ['type', '=', 'form'],
+            ['inherit_id', '!=', false],
+          ],
+          fields: ['id', 'arch'],
+          limit: 200,
+          order: 'priority asc, id asc',
+        );
+        final patches = <String>[];
+        final patchIds = <int>[];
+        for (final row in inherited) {
+          final a = row['arch'];
+          if (a is String && a.isNotEmpty) {
+            patches.add(a);
+            patchIds.add(row['id'] is num ? (row['id'] as num).toInt() : 0);
+          }
+        }
+        if (patches.isNotEmpty) {
+          final result = OdooViewInheritance.merge(
+            base: merged,
+            patches: patches,
+          );
+          merged = result.merged;
+        }
+        arch = merged;
+      }
+    } catch (_) {
+      // merge request failed — the later get_views/get_view/raw fallbacks
+      // still provide an arch.
+    }
+
+    // 2) get_views — the combined-form response the web client itself
+    //    uses: base arch + ALL inherited views applied. Pages injected
+    //    by inheritance (Timesheets, Sub-tasks…) exist only here.
+    try {
+      final res = await OdooRpcService.callKw(
+        model: 'ir.ui.view',
+        method: 'get_views',
+        args: [
+          [model],
+        ],
+        kwargs: {'options': const {}},
+      );
+      if (res is Map) {
+        dynamic node = res['views'];
+        if (node is Map && node[model] != null) node = node[model];
+        if (node is Map && node['views'] is Map) {
+          node = (node['views'] as Map)['form'];
+        }
+        if (node is Map && node['arch'] is String && node['arch'].isNotEmpty) {
+          arch = node['arch'] as String;
+        }
+      }
+    } catch (_) {
+      // unavailable endpoints fall through to get_view / raw searchRead.
+    }
+
+    // 2b) get_view — combined arch via the single-view endpoint.
+    if (arch == null) {
+      try {
+        final res = await OdooRpcService.callKw(
+          model: 'ir.ui.view',
+          method: 'get_view',
+          args: const [],
+          kwargs: {
+            'view_id': false,
+            'view_type': 'form',
+            'model': model,
+            'toolbar': false,
+          },
+        );
+        if (res is Map && res['arch'] is String && res['arch'].isNotEmpty) {
+          arch = res['arch'] as String;
+        }
+      } catch (_) {
+        // fall through to the raw-arch fallback below.
+      }
+    }
+
+    // 3) Fallback: the raw `arch` field of the best-priority form view
+    //    (no inherits applied — may lack extension pages).
+    if (arch == null) {
+      try {
+        final rows = await OdooRpcService.searchRead(
+          model: 'ir.ui.view',
+          domain: [
+            ['model', '=', model],
+            ['type', '=', 'form'],
+          ],
+          fields: ['arch'],
+          limit: 1,
+          order: 'priority asc',
+        );
+        if (rows.isNotEmpty) {
+          final a = rows[0]['arch'];
+          if (a is String && a.isNotEmpty) arch = a;
+        }
+      } catch (_) {
+        // no arch from any endpoint — caller shows cached content.
+      }
+    }
+
+    if (arch != null && arch.isNotEmpty) {
+      _archCache[model] = arch;
+      _archStamp[model] = DateTime.now();
+      _viewWidgets[model] = parseViewWidgets(arch);
+      // A freshly fetched arch can reference brand-new fields (Studio
+      // additions). Refresh the metadata cache alongside it so the
+      // layout engine knows those fields instead of pruning their
+      // pages to nothing.
+      try {
+        await getFieldDefs(model, force: true);
+      } catch (_) {}
+    }
+    return arch ?? cached;
+  }
+
+  /// Extracts `widget="…"` (and style hints) per field name from a
+  /// form/button view XML arch.
+  static Map<String, String> parseViewWidgets(String arch) {
+    final widgets = <String, String>{};
+    try {
+      final doc = XmlDocument.parse(arch);
+      for (final node in doc.findAllElements('field')) {
+        final name = node.getAttribute('name');
+        final widget = node.getAttribute('widget') ??
+            node.getAttribute('style'); // classless fallback hint
+        if (name != null && widget != null && widget != 'none') {
+          widgets[name] = widget;
+        }
+      }
+    } catch (_) {
+      // widget extraction is best-effort; arch still renders.
+    }
+    return widgets;
   }
 }

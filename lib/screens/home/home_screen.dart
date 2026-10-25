@@ -232,7 +232,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAwareRefetchMixin {
                     height: 48,
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: Theme.of(context).cardTheme.color,
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Container(

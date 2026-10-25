@@ -70,8 +70,7 @@ class _TaskFormScreenState extends State<TaskFormScreen> with OdooFormMixin {
         if (records.isNotEmpty) {
           await applyFetchedRecord(records[0]);
         }
-      } catch (e) {
-        debugPrint('Error fetching task data: $e');
+      } catch (_) {
         if (!mounted) return;
         // Fallback to static model if fetch fails
         if (t.projectId != null) {
@@ -108,8 +107,7 @@ class _TaskFormScreenState extends State<TaskFormScreen> with OdooFormMixin {
         );
         if (!mounted) return;
         await applyDefaultValues(defaults);
-      } catch (e) {
-        debugPrint('Error fetching defaults: $e');
+      } catch (_) {
       }
 
       if (widget.initialProject != null) {

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
@@ -9,9 +11,10 @@ import '../../core/theme/app_theme.dart';
 import '../../core/services/odoo_field_registry.dart';
 import '../../core/services/odoo_rpc_service.dart';
 import '../../core/widgets/collapsing_app_bar_page.dart';
+import '../../core/widgets/odoo_arch_detail_view.dart';
+import '../../core/widgets/status_badge.dart';
 import '../../core/widgets/odoo_detail_sections.dart';
 import '../../core/utils/route_observer.dart';
-import 'package:flutter_widget_from_html/flutter_widget_from_html.dart';
 import 'task_form_screen.dart';
 
 class TaskDetailScreen extends StatefulWidget {
@@ -23,13 +26,21 @@ class TaskDetailScreen extends StatefulWidget {
   State<TaskDetailScreen> createState() => _TaskDetailScreenState();
 }
 
-class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefetchMixin {
-
+class _TaskDetailScreenState extends State<TaskDetailScreen>
+    with RouteAwareRefetchMixin {
   bool _isLoading = true;
 
   Map<String, dynamic> _fieldDefs = {};
+  // View-level widget hints (widget="…") from the form view XML arch.
+  Map<String, String> _viewWidgets = {};
+  // Form view XML — drives the arch-based details layout.
+  String? _arch;
   final Map<String, dynamic> _fieldValues = {};
   final Map<String, dynamic> _rawValues = {};
+
+  /// Stage pipeline for the statusbar (`project.task.type` of the
+  /// task's project, ordered by sequence).
+  final List<Map<String, dynamic>> _stagePipeline = [];
   Set<String> _visibleFields = {};
 
   final Set<String> _defaultFields = {
@@ -60,13 +71,21 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
     _loadData();
   }
 
-  Future<void> _loadData() async {
+  Future<void> _loadData({bool force = false}) async {
     if (mounted) setState(() => _isLoading = true);
-    final defs = await OdooFieldRegistry.getFieldDefs('project.task');
+    final defs = await OdooFieldRegistry.getFieldDefs(
+      'project.task',
+      force: force,
+    );
     if (!mounted) return;
 
     _fieldDefs = defs;
     _visibleFields = Set.from(_defaultFields);
+    _viewWidgets = await OdooFieldRegistry.getViewWidgets(
+      'project.task',
+      force: force,
+    );
+    _arch = await OdooFieldRegistry.getFormArch('project.task', force: force);
 
     try {
       final records = await OdooRpcService.searchRead(
@@ -92,6 +111,11 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
             _visibleFields.add(key);
           }
         }
+        // Stage pipeline for the header statusbar: the task's project
+        // stages (plus the generic ones), ordered by sequence — the
+        // same source the web statusbar uses. Failures degrade to no
+        // pipeline row.
+        await _loadStages();
       }
     } catch (e) {
       // Fallback
@@ -110,23 +134,217 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
     }
   }
 
+  /// Fetches the stage path for the `stage_id` statusbar: project
+  /// stages first, then generic (`project_ids` empty) ones, sequence
+  ///-ordered like the web client. Odoo 19 expresses stage→project as
+  /// the m2m `project_ids`; older deployments used the m2o
+  /// `project_id` — both are tried before giving up. The current
+  /// stage row carries the elapsed-in-stage duration when the record
+  /// exposes `duration_tracking` (web's statusbar_duration source)
+  /// or `date_last_stage_update` as fallback.
+  Future<void> _loadStages() async {
+    final rawProject = _rawValues['project_id'];
+    final projectId = rawProject is List && rawProject.isNotEmpty
+        ? rawProject[0]
+        : null;
+    final rawStage = _rawValues['stage_id'];
+    final currentStageId =
+        rawStage is List && rawStage.length >= 2 ? rawStage[0] : null;
+    final duration = _stageDurationText();
+
+    List<Map<String, dynamic>> rows;
+    try {
+      rows = await OdooRpcService.searchRead(
+        model: 'project.task.type',
+        domain: projectId != null
+            ? [
+                ['project_ids', '=', projectId],
+              ]
+            : const [
+                ['project_ids', '=', false],
+              ],
+        fields: const ['name', 'color'],
+        order: 'sequence',
+      );
+    } catch (_) {
+      try {
+        rows = await OdooRpcService.searchRead(
+          model: 'project.task.type',
+          domain: projectId != null
+              ? [
+                  '|',
+                  ['project_id', '=', false],
+                  ['project_id', '=', projectId],
+                ]
+              : const [
+                  ['project_id', '=', false],
+                ],
+          fields: const ['name', 'color'],
+          order: 'sequence',
+        );
+      } catch (_) {
+        _stagePipeline.clear(); // no pipeline row on failure
+        return;
+      }
+    }
+    _stagePipeline
+      ..clear()
+      ..addAll([
+        for (final r in rows)
+          {
+            'id': r['id'],
+            'name': r['name'],
+            if (r['color'] != null) 'color': r['color'],
+            if (r['id'] != null && currentStageId == r['id'] && duration != null)
+              'duration': duration,
+          },
+      ]);
+  }
+
+  /// Elapsed time in the current stage, formatted Odoo-style
+  /// ("11h", "3d", "25m"). Prefers the server-tracked
+  /// `duration_tracking` JSON (the same source the web
+  /// statusbar_duration widget consumes) and degrades gracefully to
+  /// the wall-clock delta since `date_last_stage_update`.
+  String? _stageDurationText() {
+    final rawStage = _rawValues['stage_id'];
+    final currentId = rawStage is List && rawStage.length >= 2
+        ? rawStage[0]
+        : null;
+    if (currentId == null) return null;
+
+    final rawTracking = _rawValues['duration_tracking'];
+    if (rawTracking is String && rawTracking.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(rawTracking);
+        if (decoded is Map) {
+          var seconds = 0.0;
+          for (final entry in decoded.entries) {
+            // Keys look like "project.task.type/3,project.task.type/7"
+            // — accumulate every interval that ENDS at the current
+            // stage (task could loop back into it).
+            final parts = entry.key.toString().split(',');
+            final toId = parts.length == 2 ? int.tryParse(
+              RegExp(r'(\d+)\s*$').firstMatch(parts[1])?.group(0) ?? '',
+            ) : null;
+            final value = entry.value is num
+                ? entry.value as num
+                : num.tryParse(entry.value.toString());
+            if (toId != null && toId == currentId && value != null) {
+              seconds += value;
+            }
+          }
+          if (seconds > 0) return _humanizeStageDuration(seconds);
+        }
+      } catch (_) {/* fall through to the wall clock */}
+    }
+
+    final enteredAt = _rawValues['date_last_stage_update'];
+    if (enteredAt is String && enteredAt.isNotEmpty) {
+      final local = DateTime.tryParse(enteredAt);
+      if (local != null) {
+        // Odoo datetimes are naive UTC.
+        final utc = DateTime.utc(
+          local.year,
+          local.month,
+          local.day,
+          local.hour,
+          local.minute,
+          local.second,
+        );
+        final seconds =
+            DateTime.now().toUtc().difference(utc).inSeconds.clamp(0, 1 << 30);
+        return _humanizeStageDuration(seconds.toDouble());
+      }
+    }
+    return null;
+  }
+
+  /// Web-like duration text: minutes under an hour, hours under a
+  /// day, days beyond that.
+  static String _humanizeStageDuration(double seconds) {
+    final hours = seconds / 3600;
+    if (hours < 1) return '${seconds.round()}m';
+    if (hours < 24) return '${hours.round()}h';
+    return '${(hours / 24).round()}d';
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return CollapsingAppBarPage(
+    // Grouped layout kept as the fallback when the arch is unavailable.
+    final orderedFields = OdooDetailSections.orderedDetailFields(
+      visible: _visibleFields,
+      fieldDefs: _fieldDefs,
+      defaultFields: _defaultFields,
+    );
+    final groups = OdooDetailSections.groupDetailFields(
+      ordered: orderedFields,
+      fieldDefs: _fieldDefs,
+    );
+
+    // The tab strip lives in the OUTER pinned app bar (`bottom:`) —
+    // the pinning path that works reliably under NestedScrollView.
+    // Labels come from the exact pruning rules the body applies.
+    final tabLabels = OdooArchDetailView.computeTabLabels(
+      arch: _arch,
+      fieldDefs: _fieldDefs,
+      fieldValues: _fieldValues,
+    );
+
+    // Without tabs (arch still loading / arch has no notebook) there
+    // is no strip, so no DefaultTabController is needed.
+    final page = CollapsingAppBarPage(
       title: _fieldValues['name'] ?? widget.task.name,
-      onRefresh: _loadData,
-      titleWidget: Text(
-        _fieldValues['name'] ?? widget.task.name,
-        style: GoogleFonts.dmSerifDisplay(
-          fontSize: 30,
-          height: 1.15,
-          color: theme.colorScheme.onSurface,
-        ),
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
+      onRefresh: () => _loadData(force: true),
+      // The status badge + priority need room under the expanded
+      // title; they collapse away with it (see titleWidget below).
+      expandedHeight: 132,
+      bottom: tabLabels.isEmpty ? null : OdooArchTabStrip(labels: tabLabels),
+      titleWidget: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            _fieldValues['name'] ?? widget.task.name,
+            style: GoogleFonts.dmSerifDisplay(
+              fontSize: 30,
+              height: 1.15,
+              color: theme.colorScheme.onSurface,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              _StatusBadge(
+                state: _fieldValues['state'] ?? widget.task.state ?? '',
+                label: _resolveStateLabel(
+                  _fieldValues['state'] ?? widget.task.state ?? '',
+                ),
+              ),
+              const Spacer(),
+              Row(
+                children: List.generate(
+                  3,
+                  (i) => Icon(
+                    _isStarFilled(i)
+                        ? PhosphorIconsFill.star
+                        : PhosphorIconsRegular.star,
+                    size: 20,
+                    color: _isStarFilled(i)
+                        ? AppColors.statusReview
+                        : theme.colorScheme.onSurface.withValues(
+                            alpha: 0.2,
+                          ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
       leading: Row(
         mainAxisSize: MainAxisSize.min,
@@ -202,103 +420,57 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
             },
           ),
       ],
-      body: SingleChildScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (_isLoading)
-              const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(32.0),
-                  child: CircularProgressIndicator(color: AppColors.primary),
+      body: _isLoading
+          ? ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: const [
+                SizedBox(height: 160),
+                Center(
+                  child: SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: CircularProgressIndicator(
+                      color: AppColors.primary,
+                      strokeWidth: 3,
+                    ),
+                  ),
                 ),
-              )
-            else
-              // Content area
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if ((_fieldValues['description'] ?? widget.task.description) != null &&
-                      (_fieldValues['description'] ?? widget.task.description)!.trim().isNotEmpty &&
-                      (_fieldValues['description'] ?? widget.task.description) != 'false') ...[
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 24),
-                      child: HtmlWidget(
-                        _fieldValues['description'] ?? widget.task.description!,
-                        textStyle: GoogleFonts.poppins(
-                          fontSize: 14,
-                          height: 1.6,
-                          color: theme.colorScheme.onSurface.withValues(
-                            alpha: 0.8,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 24),
-
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: Row(
-                      children: [
-                        _StatusBadge(
-                          state: _fieldValues['state'] ?? widget.task.state ?? '',
-                          label: _resolveStateLabel(
-                            _fieldValues['state'] ?? widget.task.state ?? '',
-                          ),
-                        ),
-                        const Spacer(),
-                        Row(
-                          children: List.generate(
-                            3,
-                            (i) => Icon(
-                              _isStarFilled(i)
-                                  ? PhosphorIconsFill.star
-                                  : PhosphorIconsRegular.star,
-                              size: 20,
-                              color: _isStarFilled(i)
-                                  ? AppColors.statusReview
-                                  : theme.colorScheme.onSurface
-                                        .withValues(alpha: 0.2),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 32),
-
-                  // Odoo Style Grid layout for fields
-                  Builder(
-                    builder: (context) {
-                      final orderedFields =
-                          OdooDetailSections.orderedDetailFields(
-                        visible: _visibleFields,
-                        fieldDefs: _fieldDefs,
-                        defaultFields: _defaultFields,
-                      );
-                      final groups = OdooDetailSections.groupDetailFields(
-                        ordered: orderedFields,
-                        fieldDefs: _fieldDefs,
-                      );
-
-                      return OdooDetailGroups(
-                        fieldDefs: _fieldDefs,
-                        fieldValues: _fieldValues,
-                        metricFields: groups['metrics']!,
-                        dateFields: groups['dates']!,
-                        booleanFields: groups['booleans']!,
-                        otherFields: groups['other']!,
-                      );
-                    },
-                  ),
-                ],
+              ],
+            )
+          : OdooArchDetailView(
+              arch: _arch,
+              fieldDefs: _fieldDefs,
+              fieldValues: _fieldValues,
+              viewWidgets: _viewWidgets,
+              // The widget owns scrolling; the strip itself is pinned
+              // by the outer app bar (bottom:) and the status /
+              // priority row collapses with the expanded title, so the
+              // body only carries the switching pane.
+              stickyTabs: true,
+              stripInBody: false,
+              tabLabels: tabLabels,
+              stagePipeline: _stagePipeline,
+              fallback: OdooDetailGroups(
+                fieldDefs: _fieldDefs,
+                fieldValues: _fieldValues,
+                metricFields: groups['metrics']!,
+                dateFields: groups['dates']!,
+                booleanFields: groups['booleans']!,
+                otherFields: groups['other']!,
+                viewWidgets: _viewWidgets,
               ),
-          ],
-        ),
-      ),
+            ),
     );
+
+    return tabLabels.isEmpty
+        ? page
+        : DefaultTabController(
+            // Recreated only when the arch/label count changes so the
+            // controller survives normal reloads.
+            key: ValueKey('${_arch.hashCode}:strip${tabLabels.length}'),
+            length: tabLabels.length,
+            child: page,
+          );
   }
 
   void _showRelatedList(
@@ -373,7 +545,8 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
                         final h = hours.floor();
                         final m = ((hours - h) * 60).round();
 
-                        final hoursFormatted = '${h}h${m > 0 ? ' ${m.toString().padLeft(2, '0')}m' : ''}';
+                        final hoursFormatted =
+                            '${h}h${m > 0 ? ' ${m.toString().padLeft(2, '0')}m' : ''}';
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 8),
                           child: ClipRRect(
@@ -392,10 +565,10 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
                                     decoration: BoxDecoration(
                                       gradient: LinearGradient(
                                         colors: [
-                                          AppColors.gradientPurple.first.withValues(
-                                            alpha: 0.15,
-                                          ),
-                                          AppColors.gradientPurple.last.withValues(alpha: 0.08),
+                                          AppColors.gradientPurple.first
+                                              .withValues(alpha: 0.15),
+                                          AppColors.gradientPurple.last
+                                              .withValues(alpha: 0.08),
                                         ],
                                         begin: Alignment.topLeft,
                                         end: Alignment.bottomRight,
@@ -417,10 +590,13 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
                                   const SizedBox(width: 12),
                                   Expanded(
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         Text(
-                                          name.isNotEmpty ? name : '(No description)',
+                                          name.isNotEmpty
+                                              ? name
+                                              : '(No description)',
                                           style: theme.textTheme.titleSmall,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
@@ -437,9 +613,10 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
                                             Expanded(
                                               child: Text(
                                                 project,
-                                                style: theme.textTheme.bodySmall?.copyWith(
-                                                  color: AppColors.primary,
-                                                ),
+                                                style: theme.textTheme.bodySmall
+                                                    ?.copyWith(
+                                                      color: AppColors.primary,
+                                                    ),
                                                 overflow: TextOverflow.ellipsis,
                                               ),
                                             ),
@@ -452,7 +629,8 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
                                   Icon(
                                     PhosphorIconsRegular.caretRight,
                                     size: 16,
-                                    color: theme.colorScheme.onSurface.withValues(alpha: 0.3),
+                                    color: theme.colorScheme.onSurface
+                                        .withValues(alpha: 0.3),
                                   ),
                                 ],
                               ),
@@ -486,19 +664,24 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
   bool _isStarFilled(int index) {
     // Priority '1' in Odoo usually means "Starred" (1 star).
     // If your Odoo has multiple priority levels (0, 1, 2, 3), this maps them.
-    final rawPriority = _rawValues['priority']?.toString() ??
-                        (widget.task.isHighPriority ? '1' : '0');
+    final rawPriority =
+        _rawValues['priority']?.toString() ??
+        (widget.task.isHighPriority ? '1' : '0');
 
     final priorityInt = int.tryParse(rawPriority) ?? 0;
     return priorityInt > index;
   }
 
   String _resolveStateLabel(String state) {
-    if (state.startsWith('01_')) return 'In Progress';
-    if (state.startsWith('1_')) return 'Done';
-    if (state == '04_waiting_normal') return 'Waiting';
+    final s = state.toLowerCase();
+    if (s.startsWith('01_')) return 'In Progress';
+    if (s.startsWith('02_')) return 'Changes Requested';
+    if (s.startsWith('03_')) return 'Approved';
+    if (s.startsWith('1_cancel')) return 'Canceled';
+    if (s.startsWith('1_') || s == 'done') return 'Done';
+    if (s == '04_waiting_normal') return 'Waiting';
 
-    switch (state) {
+    switch (s) {
       case 'in_progress':
         return 'In Progress';
       case 'done':
@@ -511,41 +694,39 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> with RouteAwareRefe
   }
 }
 
+/// Tinted status pill with the web client's project.task state
+/// palette: In Progress (grey), Changes Requested (yellow),
+/// Approved / Done (green), Canceled (red).
 class _StatusBadge extends StatelessWidget {
   final String state;
   final String label;
 
   const _StatusBadge({required this.state, required this.label});
 
-  Color _getStatusColor() {
-    if (state.contains('done') || state.startsWith('1_')) {
-      return AppColors.statusDone;
-    }
-    if (state.contains('progress') || state.startsWith('01_')) {
-      return AppColors.statusInProgress;
-    }
-    if (state.contains('waiting') || state.startsWith('04_')) {
-      return AppColors.statusReview;
-    }
-    return AppColors.statusTodo;
-  }
-
+  /// Colors follow the Odoo web state-selection legend (centralized so
+  /// list cards and popups match): neutral grey for active states,
+  /// amber for changes-requested, green for approved/done, red for
+  /// canceled — with terminal states (`1_*`) rendered solid.
   @override
   Widget build(BuildContext context) {
-    final color = _getStatusColor();
+    final style = odooStateBadgeStyle(state, label);
+    final color = style.color;
+    final filled = style.filled;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
+        color: filled ? color : color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withValues(alpha: 0.2)),
+        border: Border.all(
+          color: filled ? color : color.withValues(alpha: 0.35),
+        ),
       ),
       child: Text(
         label.toUpperCase(),
         style: GoogleFonts.poppins(
           fontSize: 10,
           fontWeight: FontWeight.w700,
-          color: color,
+          color: filled ? Colors.white : color,
           letterSpacing: 0.5,
         ),
         maxLines: 1,

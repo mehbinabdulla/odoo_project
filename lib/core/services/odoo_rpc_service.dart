@@ -71,8 +71,7 @@ class OdooRpcService {
       return [];
     } on FormatException {
       return [];
-    } catch (e) {
-      debugPrint('DB Fetch error: $e');
+    } catch (_) {
       return [];
     }
   }
@@ -420,7 +419,6 @@ class OdooRpcService {
             match.groupCount >= 1) {
           final badField = match.group(1)!;
           if (resolvedFields.contains(badField)) {
-            debugPrint('Access denied or invalid field: $badField. Retrying without it.');
             resolvedFields.remove(badField);
             if (resolvedFields.isEmpty) resolvedFields = ['id'];
             attempts++;
